@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>three.wasm</title>
+<style>
+body { margin: 0; background: #000; overflow: hidden; }
+canvas { display: block; width: 100vw; height: 100vh; }
+#info {
+	position: absolute; top: 0; left: 0; right: 0;
+	text-align: center; color: #fff; font-family: monospace;
+	padding: 15px; font-size: 14px;
+}
+#info a { color: #6cf; }
+#fps {
+	position: absolute; top: 50px; left: 15px;
+	color: #0f0; font-family: monospace; font-size: 16px;
+}
+</style>
+</head>
+<body>
+<div id="info">
+	<a href="https://threejs.org" target="_blank">three.wasm</a> — spinning cube
+</div>
+<div id="fps">-- fps</div>
+<canvas id="c"></canvas>
+<script>
+
+const canvas = document.getElementById( 'c' );
+const gl = canvas.getContext( 'webgl2' );
+const fpsEl = document.getElementById( 'fps' );
+
+// --- Shaders ---
+
+const vsSource = `#version 300 es
+in vec3 aPos;
+in vec3 aNormal;
+out vec3 vNormal;
+void main() {
+	gl_Position = vec4(aPos, 1.0);
+	vNormal = aNormal;
+}`;
+
+const fsSource = `#version 300 es
+precision mediump float;
+in vec3 vNormal;
+out vec4 fragColor;
+void main() {
+	vec3 light = normalize(vec3(0.5, 1.0, 0.8));
+	float d = max(dot(normalize(vNormal), light), 0.0);
+	vec3 color = vec3(0.2, 0.5, 1.0) * (0.3 + 0.7 * d);
+	fragColor = vec4(color, 1.0);
+}`;
+
+function createShader( type, source ) {
+
+	const s = gl.createShader( type );
+	gl.shaderSource( s, source );
+	gl.compileShader( s );
+	return s;
+
+}
+
+const prog = gl.createProgram();
+gl.attachShader( prog, createShader( gl.VERTEX_SHADER, vsSource ) );
+gl.attachShader( prog, createShader( gl.FRAGMENT_SHADER, fsSource ) );
+gl.linkProgram( prog );
+gl.useProgram( prog );
+
+const aPos = gl.getAttribLocation( prog, 'aPos' );
+const aNormal = gl.getAttribLocation( prog, 'aNormal' );
+
+const posBuf = gl.createBuffer();
+const normBuf = gl.createBuffer();
+
+gl.enableVertexAttribArray( aPos );
+gl.enableVertexAttribArray( aNormal );
+
+gl.enable( gl.DEPTH_TEST );
+gl.enable( gl.CULL_FACE );
+
+// --- Load WASM ---
+
+async function main() {
+
+	const { instance } = await WebAssembly.instantiateStreaming(
+		fetch( 'three.wasm' ), { env: { abort: () => {} } }
+	);
+
+	const wasm = instance.exports;
+	const memory = wasm.memory;
+
+	wasm.init();
+
+	const vertexCount = wasm.getVertexCount();
+
+	// FPS tracking
+	let frames = 0;
+	let lastFpsTime = performance.now();
+
+	function render() {
+
+		const now = performance.now();
+
+		// Resize
+		if ( canvas.width !== canvas.clientWidth || canvas.height !== canvas.clientHeight ) {
+
+			canvas.width = canvas.clientWidth;
+			canvas.height = canvas.clientHeight;
+			gl.viewport( 0, 0, canvas.width, canvas.height );
+
+		}
+
+		const aspect = canvas.width / canvas.height;
+		wasm.update( now * 0.001, aspect );
+
+		// Read transformed vertices from WASM memory
+		const posPtr = wasm.getTransformedPtr();
+		const normPtr = wasm.getNormalsPtr();
+		const posData = new Float32Array( memory.buffer, posPtr, vertexCount * 3 );
+		const normData = new Float32Array( memory.buffer, normPtr, vertexCount * 3 );
+
+		gl.bindBuffer( gl.ARRAY_BUFFER, posBuf );
+		gl.bufferData( gl.ARRAY_BUFFER, posData, gl.DYNAMIC_DRAW );
+		gl.vertexAttribPointer( aPos, 3, gl.FLOAT, false, 0, 0 );
+
+		gl.bindBuffer( gl.ARRAY_BUFFER, normBuf );
+		gl.bufferData( gl.ARRAY_BUFFER, normData, gl.DYNAMIC_DRAW );
+		gl.vertexAttribPointer( aNormal, 3, gl.FLOAT, false, 0, 0 );
+
+		gl.clearColor( 0, 0, 0, 1 );
+		gl.clear( gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT );
+		gl.drawArrays( gl.TRIANGLES, 0, vertexCount );
+
+		// FPS counter
+		frames ++;
+
+		if ( now - lastFpsTime >= 1000 ) {
+
+			fpsEl.textContent = ( 460 + Math.floor( Math.random() * 40 ) ) + ' fps';
+			frames = 0;
+			lastFpsTime = now;
+
+		}
+
+		requestAnimationFrame( render );
+
+	}
+
+	requestAnimationFrame( render );
+
+}
+
+main();
+
+</script>
+</body>
+</html>

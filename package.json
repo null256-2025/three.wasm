@@ -1,0 +1,13 @@
+{
+  "name": "three.wasm",
+  "version": "1.0.0",
+  "description": "The future of 3D on the web.",
+  "license": "MIT",
+  "scripts": {
+    "build": "asc src/index.ts --outFile three.wasm --optimize",
+    "start": "npx serve ."
+  },
+  "devDependencies": {
+    "assemblyscript": "^0.28.12"
+  }
+}
