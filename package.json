@@ -1,13 +1,9 @@
 {
-  "name": "three.wasm",
+  "name": "sakura-demo",
   "version": "1.0.0",
-  "description": "The future of 3D on the web.",
-  "license": "MIT",
+  "private": true,
+  "description": "A single-file sakura scene built with three.js.",
   "scripts": {
-    "build": "asc src/index.ts --outFile three.wasm --optimize",
     "start": "npx serve ."
-  },
-  "devDependencies": {
-    "assemblyscript": "^0.28.12"
   }
 }
