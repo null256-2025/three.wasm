@@ -1,18 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="ja">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sakura Demo</title>
+  <title>Sakura Reverie</title>
   <link rel="icon" href="data:," />
   <style>
     :root {
       color-scheme: light;
-      --sky: #87ceeb;
-      --panel: rgba(255, 248, 240, 0.18);
-      --panel-border: rgba(255, 255, 255, 0.24);
-      --panel-shadow: rgba(51, 27, 15, 0.18);
-      --ink: #1d1b22;
+      --rose-50: rgba(255, 248, 252, 0.86);
+      --rose-100: rgba(255, 240, 246, 0.56);
+      --rose-200: rgba(228, 172, 189, 0.32);
+      --rose-300: rgba(146, 83, 103, 0.88);
+      --ink-soft: rgba(73, 43, 54, 0.9);
     }
 
     html,
@@ -24,9 +24,10 @@
     }
 
     body {
-      background: var(--sky);
-      font-family: "Trebuchet MS", "Segoe UI", system-ui, sans-serif;
-      color: var(--ink);
+      background:
+        radial-gradient(circle at 50% 76%, #f9e1ea 0%, #f2c8d4 42%, #e3a8bc 100%);
+      font-family: "Yu Mincho", "Hiragino Mincho ProN", "Times New Roman", serif;
+      color: var(--ink-soft);
     }
 
     canvas {
@@ -35,87 +36,91 @@
       height: 100%;
     }
 
-    #ui {
+    #overlay {
       position: fixed;
       inset: 0;
       pointer-events: none;
-      padding: 20px;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      padding: 18px;
       box-sizing: border-box;
+    }
+
+    #header {
       display: flex;
       justify-content: space-between;
       align-items: flex-start;
       gap: 16px;
     }
 
-    .panel {
-      background: var(--panel);
-      border: 1px solid var(--panel-border);
-      box-shadow: 0 18px 45px var(--panel-shadow);
-      backdrop-filter: blur(10px);
-      -webkit-backdrop-filter: blur(10px);
-      border-radius: 18px;
-      color: #fff;
+    .chip {
+      padding: 11px 15px;
+      border-radius: 999px;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      background: linear-gradient(135deg, var(--rose-50), var(--rose-100));
+      border: 1px solid rgba(255, 255, 255, 0.5);
+      box-shadow:
+        0 18px 42px rgba(128, 64, 85, 0.14),
+        inset 0 1px 0 rgba(255, 255, 255, 0.6);
     }
 
     #title {
-      max-width: 400px;
-      padding: 16px 18px;
+      max-width: 360px;
     }
 
-    #title h1 {
-      margin: 0 0 8px;
-      font-size: 18px;
-      line-height: 1.2;
-      letter-spacing: 0.06em;
+    #title strong {
+      display: block;
+      font-size: 20px;
+      letter-spacing: 0.14em;
       text-transform: uppercase;
     }
 
-    #title p {
-      margin: 0;
-      font-size: 14px;
-      line-height: 1.55;
-      opacity: 0.95;
+    #title span {
+      display: block;
+      margin-top: 4px;
+      font-size: 12px;
+      letter-spacing: 0.08em;
+      color: rgba(104, 60, 74, 0.86);
     }
 
-    #hud {
-      display: flex;
-      gap: 12px;
-      align-items: flex-start;
-    }
-
-    #fps {
-      padding: 10px 14px;
-      min-width: 76px;
-      text-align: center;
+    #stats {
+      font-size: 12px;
+      line-height: 1.6;
       font-variant-numeric: tabular-nums;
-      font-size: 15px;
-      letter-spacing: 0.04em;
+      text-align: right;
+      white-space: nowrap;
+    }
+
+    #footer {
+      display: flex;
+      justify-content: center;
     }
 
     #hint {
-      padding: 10px 14px;
-      font-size: 13px;
-      line-height: 1.45;
-      max-width: 280px;
-      color: rgba(255, 255, 255, 0.92);
+      max-width: min(92vw, 620px);
+      text-align: center;
+      font-size: 12px;
+      letter-spacing: 0.06em;
+      line-height: 1.5;
     }
 
     @media (max-width: 720px) {
-      #ui {
+      #overlay {
         padding: 12px;
-        flex-direction: column;
-        justify-content: space-between;
       }
 
-      #title {
-        max-width: none;
+      #header {
+        flex-direction: column;
+        align-items: stretch;
       }
 
-      #hud {
-        margin-top: auto;
-        align-self: flex-end;
-        flex-direction: column;
-        align-items: flex-end;
+      #stats {
+        text-align: left;
+      }
+
+      #title strong {
+        font-size: 17px;
       }
     }
   </style>
@@ -123,21 +128,24 @@
   <script type="importmap">
     {
       "imports": {
-        "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        "three": "https://cdn.jsdelivr.net/npm/three@0.160/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160/examples/jsm/"
       }
     }
   </script>
 </head>
 <body>
-  <div id="ui">
-    <div id="title" class="panel">
-      <h1>Sakura Demo</h1>
-      <p>Orbit around the tree. Blossoms are seeded from twig positions, and petals respawn around the canopy.</p>
+  <div id="overlay" aria-hidden="true">
+    <div id="header">
+      <div id="title" class="chip">
+        <strong>Sakura Reverie</strong>
+        <span>満開から散り終わりまでを、1枚ずつ積もる花びらで描く。</span>
+      </div>
+      <div id="stats" class="chip">fps 0 | 木 0 | 落下 0 | 地面 0</div>
     </div>
-    <div id="hud">
-      <div id="fps" class="panel">0 fps</div>
-      <div id="hint" class="panel">Drag to orbit. Wheel to zoom. Use the control panel in the top-right to tune wind and petals.</div>
+    <div></div>
+    <div id="footer">
+      <div id="hint" class="chip">ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ 花びらは消えずに積もります</div>
     </div>
   </div>
 
@@ -145,137 +153,220 @@
 
   <script type="module">
     import * as THREE from 'three';
-    import { Pane } from 'https://cdn.jsdelivr.net/npm/tweakpane@4.0.5/dist/tweakpane.min.js';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-    const canvas = document.getElementById('scene');
-    const fpsEl = document.getElementById('fps');
-
-    const CONFIG = {
-      gravity: 0.0008,
-      windStrength: 0.003,
-      airResistance: 0.98,
-      fallSpeedMin: 0.008,
-      fallSpeedMax: 0.015,
-      groundY: 0.01,
-      autoRotateSpeed: 0.3,
-    };
+    const PETAL_COUNT = 2000;
+    const PETAL_SIZE = 0.10;
+    const GROUND_Y = 0.32;
+    const GROUND_Y_OUTER = -0.20;
+    const ISLAND_RADIUS = 3.2;
+    const AUTO_ROTATE_SPEED = 0.3;
+    const FIXED_DT = 1 / 60;
 
     const PARAMS = {
-      petalCount: 500,
-      windStrength: 0.003,
-      gravity: 0.0008,
-      airResistance: 0.98,
-      autoRotate: true,
+      windStrength: 0.002,
+      gravity: 0.0006,
+      airResistance: 0.97,
+    };
+
+    const PETAL_STATE = {
+      ON_TREE: 0,
+      FALLING: 1,
+      ON_GROUND: 2,
+    };
+
+    const COLORS = {
+      backdropTop: 0xfff7fb,
+      backdropBottom: 0xe4afc0,
+      fog: 0xf1d2dc,
+      petal: 0xf7dce8,
+      trunk: 0x5a3423,
+      soil: 0x7a4d33,
+      grass: 0xddd1cf,
+      meadow: 0xdab8c4,
+      meadowShadow: 0xc18f9e,
+      lightWarm: 0xfff8f0,
+      lightCool: 0xf3d8e2,
     };
 
     const BLOSSOM_POSITIONS = [];
-    const petals = [];
+    const petalData = [];
     const dummy = new THREE.Object3D();
-    const clock = new THREE.Clock();
+    const statsEl = document.getElementById('stats');
+    const canvas = document.getElementById('scene');
 
     let scene;
     let camera;
     let renderer;
     let controls;
     let petalMesh;
-    let petalGeometry;
-    let petalMaterial;
-    let fpsFrames = 0;
+    let simTime = 0;
+    let frameCount = 0;
+    let accumulator = 0;
+    let lastFrameTime = performance.now();
+    let fpsFrameCounter = 0;
     let fpsStamp = performance.now();
+    let fpsValue = 0;
+
+    const stats = {
+      onTree: PETAL_COUNT,
+      falling: 0,
+      onGround: 0,
+    };
 
     initScene();
+    createBackdrop();
     createGround();
     createTree();
-    createPetals(PARAMS.petalCount);
-    initUI();
-    onWindowResize();
-    animate();
+    createRoots();
+    createRocks();
+    createPetals();
+    refreshHud();
+    render();
 
-    window.addEventListener('resize', onWindowResize);
+    window.render_game_to_text = renderGameToText;
+    window.advanceTime = advanceTime;
+
+    requestAnimationFrame(animate);
 
     function initScene() {
       scene = new THREE.Scene();
-      scene.background = null;
-      scene.fog = null;
+      scene.fog = new THREE.Fog(COLORS.fog, 16, 46);
 
       camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 100);
-      camera.position.set(0, 4, 8);
-      camera.lookAt(0, 1.5, 0);
+      camera.position.set(0, 4.8, 10.8);
+      camera.lookAt(0, 2.2, 0);
 
       renderer = new THREE.WebGLRenderer({
         canvas,
         antialias: true,
-        alpha: false,
+        alpha: true,
         powerPreference: 'high-performance',
       });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(window.innerWidth, window.innerHeight, false);
-      renderer.setClearColor(0x87ceeb, 1);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
-      renderer.toneMappingExposure = 1.05;
+      renderer.toneMappingExposure = 1.22;
+      renderer.sortObjects = true;
 
       controls = new OrbitControls(camera, renderer.domElement);
-      controls.target.set(0, 1.5, 0);
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = AUTO_ROTATE_SPEED;
       controls.enableDamping = true;
-      controls.dampingFactor = 0.06;
+      controls.dampingFactor = 0.05;
       controls.enablePan = false;
-      controls.minDistance = 3;
-      controls.maxDistance = 15;
-      controls.autoRotate = PARAMS.autoRotate;
-      controls.autoRotateSpeed = CONFIG.autoRotateSpeed;
+      controls.minDistance = 4;
+      controls.maxDistance = 16;
+      controls.target.set(0, 2.2, 0);
       controls.update();
 
-      const ambient = new THREE.AmbientLight(0xfff8f0, 0.8);
-      const keyLight = new THREE.DirectionalLight(0xffffff, 1.2);
+      const ambientLight = new THREE.AmbientLight(COLORS.lightWarm, 0.95);
+      const keyLight = new THREE.DirectionalLight(0xffffff, 1.25);
       keyLight.position.set(5, 10, 5);
-      const rimLight = new THREE.DirectionalLight(0xc8e8ff, 0.4);
-      rimLight.position.set(-3, 5, -3);
+      const fillLight = new THREE.DirectionalLight(COLORS.lightCool, 0.52);
+      fillLight.position.set(-3, 5, -3);
 
-      scene.add(ambient, keyLight, rimLight);
+      scene.add(ambientLight, keyLight, fillLight);
+
+      window.addEventListener('resize', onWindowResize);
+      window.addEventListener('keydown', onKeyDown);
+      document.addEventListener('fullscreenchange', onWindowResize);
+    }
+
+    function createBackdrop() {
+      const geometry = new THREE.SphereGeometry(70, 40, 20);
+      const material = new THREE.ShaderMaterial({
+        side: THREE.BackSide,
+        depthWrite: false,
+        fog: false,
+        uniforms: {
+          topColor: { value: new THREE.Color(COLORS.backdropTop) },
+          bottomColor: { value: new THREE.Color(COLORS.backdropBottom) },
+        },
+        vertexShader: `
+          varying float vMix;
+
+          void main() {
+            vec4 worldPosition = modelMatrix * vec4(position, 1.0);
+            vMix = clamp(worldPosition.y / 36.0 + 0.5, 0.0, 1.0);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform vec3 topColor;
+          uniform vec3 bottomColor;
+          varying float vMix;
+
+          void main() {
+            float mixValue = smoothstep(0.0, 1.0, vMix);
+            vec3 color = mix(bottomColor, topColor, mixValue);
+            color += vec3(0.03, 0.01, 0.02) * pow(1.0 - mixValue, 2.0);
+            gl_FragColor = vec4(color, 1.0);
+          }
+        `,
+      });
+
+      scene.add(new THREE.Mesh(geometry, material));
     }
 
     function createGround() {
-      const islandGeo = new THREE.CylinderGeometry(3.5, 4.0, 0.6, 8);
-      const islandPos = islandGeo.attributes.position;
-      for (let i = 0; i < islandPos.count; i++) {
-        const y = islandPos.getY(i);
-        if (y > 0) {
-          islandPos.setX(i, islandPos.getX(i) + (Math.random() - 0.5) * 0.2);
-          islandPos.setZ(i, islandPos.getZ(i) + (Math.random() - 0.5) * 0.2);
-          islandPos.setY(i, y + Math.random() * 0.05);
-        }
+      const grassMaterial = new THREE.MeshLambertMaterial({ color: COLORS.grass });
+      const soilMaterial = new THREE.MeshLambertMaterial({ color: COLORS.soil });
+
+      const capGeometry = new THREE.CylinderGeometry(3.2, 3.2, 0.02, 10);
+      const capMesh = new THREE.Mesh(capGeometry, grassMaterial);
+      capMesh.position.y = 0.31;
+      scene.add(capMesh);
+
+      const bodyGeometry = new THREE.CylinderGeometry(3.2, 3.8, 0.6, 10, 1, false);
+      const bodyPosition = bodyGeometry.attributes.position;
+      for (let i = 0; i < bodyPosition.count; i += 1) {
+        const y = bodyPosition.getY(i);
+        const offsetStrength = y < 0 ? 0.15 : 0.08;
+        bodyPosition.setX(i, bodyPosition.getX(i) + (Math.random() - 0.5) * offsetStrength);
+        bodyPosition.setZ(i, bodyPosition.getZ(i) + (Math.random() - 0.5) * offsetStrength);
       }
-      islandGeo.computeVertexNormals();
+      bodyGeometry.computeVertexNormals();
 
-      const grassMat = new THREE.MeshLambertMaterial({ color: 0x7ec850 });
-      const sideMat = new THREE.MeshLambertMaterial({ color: 0x1a1a1a });
-      const island = new THREE.Mesh(islandGeo, [sideMat, grassMat, sideMat]);
-      scene.add(island);
+      const bodyMesh = new THREE.Mesh(bodyGeometry, [soilMaterial, grassMaterial, soilMaterial]);
+      bodyMesh.position.y = 0.01;
+      scene.add(bodyMesh);
 
-      const groundGeo = new THREE.PlaneGeometry(60, 60, 8, 8);
-      const groundPos = groundGeo.attributes.position;
-      for (let i = 0; i < groundPos.count; i++) {
-        groundPos.setZ(i, groundPos.getZ(i) + (Math.random() - 0.5) * 0.3);
+      const meadowGeometry = new THREE.PlaneGeometry(120, 120, 12, 12);
+      const meadowPosition = meadowGeometry.attributes.position;
+      for (let i = 0; i < meadowPosition.count; i += 1) {
+        meadowPosition.setZ(i, meadowPosition.getZ(i) + (Math.random() - 0.5) * 0.4);
       }
-      groundGeo.computeVertexNormals();
+      meadowGeometry.computeVertexNormals();
 
-      const groundMat = new THREE.MeshLambertMaterial({ color: 0x6aaa40 });
-      const ground = new THREE.Mesh(groundGeo, groundMat);
-      ground.rotation.x = -Math.PI / 2;
-      ground.position.y = -0.31;
-      scene.add(ground);
+      const meadowMaterial = new THREE.MeshLambertMaterial({ color: COLORS.meadow });
+      const meadow = new THREE.Mesh(meadowGeometry, meadowMaterial);
+      meadow.rotation.x = -Math.PI / 2;
+      meadow.position.y = GROUND_Y_OUTER;
+      scene.add(meadow);
+
+      const glowGeometry = new THREE.CircleGeometry(5.8, 40);
+      const glowMaterial = new THREE.MeshBasicMaterial({
+        color: COLORS.meadowShadow,
+        transparent: true,
+        opacity: 0.12,
+        depthWrite: false,
+      });
+      const glow = new THREE.Mesh(glowGeometry, glowMaterial);
+      glow.rotation.x = -Math.PI / 2;
+      glow.position.y = GROUND_Y_OUTER + 0.01;
+      scene.add(glow);
     }
 
     function flattenVertices(vertices) {
       const flat = [];
-      for (let i = 0; i < vertices.length; i++) {
-        const v = vertices[i];
-        if (Array.isArray(v)) {
-          flat.push(v[0], v[1], v[2]);
+      for (let i = 0; i < vertices.length; i += 1) {
+        const vertex = vertices[i];
+        if (Array.isArray(vertex)) {
+          flat.push(vertex[0], vertex[1], vertex[2]);
         } else {
-          flat.push(v.x, v.y, v.z);
+          flat.push(vertex.x, vertex.y, vertex.z);
         }
       }
       return flat;
@@ -283,12 +374,12 @@
 
     function flattenFaces(faces) {
       const flat = [];
-      for (let i = 0; i < faces.length; i++) {
-        const f = faces[i];
-        if (Array.isArray(f)) {
-          flat.push(f[0], f[1], f[2]);
+      for (let i = 0; i < faces.length; i += 1) {
+        const face = faces[i];
+        if (Array.isArray(face)) {
+          flat.push(face[0], face[1], face[2]);
         } else {
-          flat.push(f.a, f.b, f.c);
+          flat.push(face.a, face.b, face.c);
         }
       }
       return flat;
@@ -298,27 +389,49 @@
       const geometry = new THREE.BufferGeometry();
       geometry.setAttribute('position', new THREE.Float32BufferAttribute(flattenVertices(vertices), 3));
       geometry.setIndex(flattenFaces(faces));
+
+      const position = geometry.attributes.position;
+      for (let i = 0; i < position.count; i += 1) {
+        const y = position.getY(i);
+        const radialBoost = THREE.MathUtils.clamp(0.35 - y * 0.12, 0.0, 0.28);
+        if (radialBoost > 0) {
+          position.setX(i, position.getX(i) * (1 + radialBoost));
+          position.setZ(i, position.getZ(i) * (1 + radialBoost));
+        }
+      }
+
       geometry.computeVertexNormals();
       return geometry;
     }
 
-    function normalizeTwigVertices(tree) {
-      const twigVertices = tree.vertsTwig || tree.twigVerts || [];
-      const positions = [];
-      for (let i = 0; i < twigVertices.length; i++) {
-        const v = twigVertices[i];
-        if (Array.isArray(v)) {
-          positions.push(new THREE.Vector3(v[0], v[1] + 0.3, v[2]));
-        } else {
-          positions.push(new THREE.Vector3(v.x, v.y + 0.3, v.z));
+    function collectTwigPositions(tree) {
+      const twigVertices = tree.twigVerts || tree.vertsTwig || [];
+      BLOSSOM_POSITIONS.length = 0;
+
+      for (let i = 0; i < twigVertices.length; i += 3) {
+        const vertex = twigVertices[i];
+        const x = Array.isArray(vertex) ? vertex[0] : vertex.x;
+        const y = Array.isArray(vertex) ? vertex[1] : vertex.y;
+        const z = Array.isArray(vertex) ? vertex[2] : vertex.z;
+        BLOSSOM_POSITIONS.push(new THREE.Vector3(x, y + 0.3, z));
+      }
+
+      const extra = [];
+      for (let i = 0; i < BLOSSOM_POSITIONS.length; i += 1) {
+        const position = BLOSSOM_POSITIONS[i];
+        for (let j = 0; j < 5; j += 1) {
+          extra.push(new THREE.Vector3(
+            position.x + (Math.random() - 0.5) * 0.28,
+            position.y + (Math.random() - 0.5) * 0.16,
+            position.z + (Math.random() - 0.5) * 0.28
+          ));
         }
       }
-      return positions;
+
+      BLOSSOM_POSITIONS.push(...extra);
     }
 
     function createTree() {
-      BLOSSOM_POSITIONS.length = 0;
-
       const treeParams = {
         clumpMax: 0.454,
         clumpMin: 0.404,
@@ -335,6 +448,7 @@
         segments: 6,
         levels: 4,
         sweepAmount: 0,
+        initialBranchLength: 0.85,
         initalBranchLength: 0.85,
         trunkLength: 1.8,
         dropAmount: -0.1,
@@ -345,94 +459,98 @@
       };
 
       const tree = new window.Tree(treeParams);
-
-      const trunkGeo = buildTreeGeometry(tree.verts, tree.faces);
-      const trunkMat = new THREE.MeshLambertMaterial({ color: 0x3d1c0f });
-      const trunkMesh = new THREE.Mesh(trunkGeo, trunkMat);
+      const trunkGeometry = buildTreeGeometry(tree.verts, tree.faces);
+      const trunkMaterial = new THREE.MeshLambertMaterial({ color: COLORS.trunk });
+      const trunkMesh = new THREE.Mesh(trunkGeometry, trunkMaterial);
       trunkMesh.position.y = 0.3;
       scene.add(trunkMesh);
 
-      const twigPositions = normalizeTwigVertices(tree);
-      const placedPositions = new Set();
-      let blossomCount = 0;
+      collectTwigPositions(tree);
+    }
 
-      for (let i = 0; i < twigPositions.length; i += 6) {
-        if (blossomCount > 40) {
-          break;
-        }
+    function createRoots() {
+      const rootMaterial = new THREE.MeshLambertMaterial({ color: COLORS.trunk });
+      const rootGeometry = new THREE.CylinderGeometry(0.065, 0.02, 0.95, 5);
+      const configs = [
+        { x: 0.36, z: 0.15, ry: -0.7, rz: -1.05 },
+        { x: -0.32, z: 0.26, ry: 0.4, rz: 1.08 },
+        { x: 0.15, z: -0.36, ry: 0.2, rz: -0.88 },
+        { x: -0.18, z: -0.42, ry: -0.55, rz: 0.92 },
+      ];
 
-        const pos = twigPositions[i];
-        const key = `${Math.round(pos.x * 2)},${Math.round(pos.y * 2)},${Math.round(pos.z * 2)}`;
-        if (placedPositions.has(key)) {
-          continue;
-        }
-        placedPositions.add(key);
-
-        const size = 0.35 + Math.random() * 0.25;
-        const blossomGeo = new THREE.SphereGeometry(size, 5, 4);
-        const posAttr = blossomGeo.attributes.position;
-        for (let v = 0; v < posAttr.count; v++) {
-          posAttr.setX(v, posAttr.getX(v) + (Math.random() - 0.5) * 0.1);
-          posAttr.setY(v, posAttr.getY(v) + (Math.random() - 0.5) * 0.1);
-          posAttr.setZ(v, posAttr.getZ(v) + (Math.random() - 0.5) * 0.1);
-        }
-        blossomGeo.computeVertexNormals();
-
-        const hue = 0.93 + Math.random() * 0.04;
-        const blossomColor = new THREE.Color().setHSL(hue, 0.7, 0.72);
-        const blossom = new THREE.Mesh(
-          blossomGeo,
-          new THREE.MeshLambertMaterial({ color: blossomColor, side: THREE.DoubleSide })
-        );
-        blossom.position.copy(pos);
-        scene.add(blossom);
-        BLOSSOM_POSITIONS.push(pos.clone());
-        blossomCount += 1;
+      for (let i = 0; i < configs.length; i += 1) {
+        const config = configs[i];
+        const root = new THREE.Mesh(rootGeometry, rootMaterial);
+        root.position.set(config.x, 0.17, config.z);
+        root.rotation.y = config.ry;
+        root.rotation.z = config.rz;
+        scene.add(root);
       }
     }
 
-    function disposePetals() {
-      if (petalMesh) {
-        scene.remove(petalMesh);
-        petalMesh.geometry.dispose();
-        petalMesh.material.dispose();
-        petalMesh = null;
+    function createRocks() {
+      const configs = [
+        { x: 0.8, z: 0.5, sx: 0.35, sy: 0.28, sz: 0.32, ry: 0.3 },
+        { x: -0.5, z: 0.8, sx: 0.28, sy: 0.22, sz: 0.30, ry: 1.1 },
+        { x: 0.3, z: -0.7, sx: 0.42, sy: 0.25, sz: 0.35, ry: 2.2 },
+        { x: -0.9, z: -0.3, sx: 0.20, sy: 0.18, sz: 0.22, ry: 0.8 },
+      ];
+
+      for (let i = 0; i < configs.length; i += 1) {
+        const config = configs[i];
+        const geometry = new THREE.IcosahedronGeometry(0.5, 1);
+        const position = geometry.attributes.position;
+        for (let j = 0; j < position.count; j += 1) {
+          position.setX(j, position.getX(j) + (Math.random() - 0.5) * 0.15);
+          position.setY(j, position.getY(j) + (Math.random() - 0.5) * 0.10);
+          position.setZ(j, position.getZ(j) + (Math.random() - 0.5) * 0.15);
+        }
+        geometry.computeVertexNormals();
+
+        const brightness = 0.65 + Math.random() * 0.2;
+        const material = new THREE.MeshLambertMaterial({
+          color: new THREE.Color(brightness, brightness, brightness),
+        });
+        const rock = new THREE.Mesh(geometry, material);
+        rock.position.set(config.x, 0.28 + config.sy * 0.3, config.z);
+        rock.rotation.y = config.ry;
+        rock.scale.set(config.sx, config.sy, config.sz);
+        scene.add(rock);
       }
-      petals.length = 0;
     }
 
     function createPetalMaterial() {
       return new THREE.ShaderMaterial({
         uniforms: {
-          color: { value: new THREE.Color(0xf0b0c8) },
+          color: { value: new THREE.Color(COLORS.petal) },
         },
         vertexShader: `
-          precision highp float;
           varying vec2 vUv;
+          varying float vBrightness;
 
           void main() {
             vUv = uv;
-            vec4 worldPosition = instanceMatrix * vec4(position, 1.0);
-            gl_Position = projectionMatrix * modelViewMatrix * worldPosition;
+            vBrightness = 0.9 + fract(sin(float(gl_InstanceID) * 12.9898) * 43758.5453) * 0.2;
+            gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
           }
         `,
         fragmentShader: `
-          precision highp float;
           uniform vec3 color;
           varying vec2 vUv;
+          varying float vBrightness;
 
           void main() {
             vec2 uv = vUv - 0.5;
             float d1 = length(uv - vec2(-0.18, 0.05)) - 0.28;
-            float d2 = length(uv - vec2( 0.18, 0.05)) - 0.28;
-            float d3 = length(uv - vec2( 0.00, -0.15)) - 0.22;
+            float d2 = length(uv - vec2(0.18, 0.05)) - 0.28;
+            float d3 = length(uv - vec2(0.0, -0.15)) - 0.22;
             float d = min(min(d1, d2), d3);
             float alpha = 1.0 - smoothstep(-0.02, 0.02, d);
-
             if (alpha < 0.1) discard;
 
-            float brightness = 1.0 + length(uv) * 0.3;
-            gl_FragColor = vec4(color * brightness, alpha);
+            vec3 c = color * vBrightness;
+            c += (1.0 - length(uv) * 2.0) * 0.08;
+            gl_FragColor = vec4(c, alpha);
           }
         `,
         transparent: true,
@@ -441,199 +559,272 @@
       });
     }
 
-    function createPetalGeometry() {
-      const geometry = new THREE.PlaneGeometry(0.18, 0.12);
-      geometry.computeBoundingSphere();
-      return geometry;
-    }
-
-    function createPetals(count) {
-      disposePetals();
-
-      petalGeometry = createPetalGeometry();
-      petalMaterial = createPetalMaterial();
-      petalMesh = new THREE.InstancedMesh(petalGeometry, petalMaterial, count);
+    function createPetals() {
+      const petalGeometry = new THREE.PlaneGeometry(PETAL_SIZE * 1.5, PETAL_SIZE);
+      const petalMaterial = createPetalMaterial();
+      petalMesh = new THREE.InstancedMesh(petalGeometry, petalMaterial, PETAL_COUNT);
       petalMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       petalMesh.frustumCulled = false;
+      petalMesh.renderOrder = 3;
       scene.add(petalMesh);
 
-      for (let i = 0; i < count; i++) {
-        petals.push(createPetal(0));
-        updatePetalMatrix(i);
+      petalData.length = 0;
+
+      for (let i = 0; i < PETAL_COUNT; i += 1) {
+        const origin = BLOSSOM_POSITIONS[(Math.random() * BLOSSOM_POSITIONS.length) | 0];
+        const treePosition = new THREE.Vector3(
+          origin.x + (Math.random() - 0.5) * 0.24,
+          origin.y + (Math.random() - 0.5) * 0.14,
+          origin.z + (Math.random() - 0.5) * 0.24
+        );
+        const rotation = new THREE.Euler(
+          (Math.random() - 0.5) * 0.8,
+          Math.random() * Math.PI * 2,
+          (Math.random() - 0.5) * 0.8
+        );
+        const rotationSpeed = new THREE.Vector3(
+          (Math.random() - 0.5) * 0.04,
+          (Math.random() - 0.5) * 0.02,
+          (Math.random() - 0.5) * 0.04
+        );
+
+        const petal = {
+          state: PETAL_STATE.ON_TREE,
+          treePosition,
+          position: new THREE.Vector3(),
+          velocity: new THREE.Vector3(),
+          rotation,
+          rotationSpeed,
+          windPhase: Math.random() * Math.PI * 2,
+          fallDelay: 180 + Math.floor(Math.random() * 3600),
+          scale: 0.96 + Math.random() * 0.58,
+          swayAmplitude: 0.004 + Math.random() * 0.006,
+          groundOffset: Math.random() * 0.01,
+        };
+
+        petal.position.copy(treePosition);
+        petalData.push(petal);
+
+        dummy.position.copy(treePosition);
+        dummy.rotation.copy(rotation);
+        dummy.scale.setScalar(petal.scale);
+        dummy.updateMatrix();
+        petalMesh.setMatrixAt(i, dummy.matrix);
       }
 
       petalMesh.instanceMatrix.needsUpdate = true;
     }
 
-    function createPetal(now) {
-      const petal = {
-        position: new THREE.Vector3(),
-        velocity: new THREE.Vector3(),
-        rotation: new THREE.Euler(),
-        rotationSpeed: new THREE.Vector3(),
-        windPhase: Math.random() * Math.PI * 2,
-        fallSpeed: CONFIG.fallSpeedMin,
-        active: true,
-        groundY: CONFIG.groundY,
-        respawnAt: 0,
-        scale: 1,
-      };
-
-      resetPetal(petal, now);
-      return petal;
-    }
-
-    function sampleSpawnPoint() {
-      const origins = BLOSSOM_POSITIONS.length > 0
-        ? BLOSSOM_POSITIONS
-        : [new THREE.Vector3(0, 3.5, 0)];
-
-      const origin = origins[(Math.random() * origins.length) | 0];
-
-      return new THREE.Vector3(
-        origin.x + (Math.random() - 0.5) * 0.6,
-        origin.y + (Math.random() - 0.5) * 0.3,
-        origin.z + (Math.random() - 0.5) * 0.6
-      );
-    }
-
-    function resetPetal(petal, now) {
-      const spawn = sampleSpawnPoint();
-
-      petal.position.copy(spawn);
-      petal.velocity.set(
-        (Math.random() - 0.5) * 0.02,
-        -Math.random() * 0.005,
-        (Math.random() - 0.5) * 0.02
-      );
-      petal.rotation.set(
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2,
-        Math.random() * Math.PI * 2
-      );
-      petal.rotationSpeed.set(
-        (Math.random() - 0.5) * 0.04,
-        (Math.random() - 0.5) * 0.02,
-        (Math.random() - 0.5) * 0.04
-      );
-      petal.windPhase = Math.random() * Math.PI * 2;
-      petal.fallSpeed = CONFIG.fallSpeedMin + Math.random() * (CONFIG.fallSpeedMax - CONFIG.fallSpeedMin);
-      petal.scale = 0.78 + Math.random() * 0.5;
-      petal.active = true;
-      petal.respawnAt = now + 0.9 + Math.random() * 1.4;
-    }
-
-    function updatePetalMatrix(index) {
-      const petal = petals[index];
-      dummy.position.copy(petal.position);
-      dummy.rotation.copy(petal.rotation);
-      dummy.scale.setScalar(petal.scale);
-      dummy.updateMatrix();
-      petalMesh.setMatrixAt(index, dummy.matrix);
-    }
-
     function updatePetals(time) {
-      for (let i = 0; i < petals.length; i++) {
-        const petal = petals[i];
+      let matrixChanged = false;
+      let onTree = 0;
+      let falling = 0;
+      let onGround = 0;
 
-        if (!petal.active) {
-          if (time >= petal.respawnAt) {
-            resetPetal(petal, time);
-          }
-          updatePetalMatrix(i);
+      for (let i = 0; i < petalData.length; i += 1) {
+        const petal = petalData[i];
+
+        if (petal.state === PETAL_STATE.ON_GROUND) {
+          onGround += 1;
           continue;
         }
 
-        petal.velocity.y -= PARAMS.gravity + petal.fallSpeed * 0.00015;
-        petal.velocity.x += Math.sin(time * 0.8 + petal.windPhase) * PARAMS.windStrength;
-        petal.velocity.z += Math.cos(time * 0.6 + petal.windPhase) * PARAMS.windStrength * 0.66;
+        if (petal.state === PETAL_STATE.ON_TREE) {
+          const swayX = Math.sin(time * 1.7 + petal.windPhase) * petal.swayAmplitude;
+          const swayY = Math.cos(time * 1.1 + petal.windPhase * 0.6) * petal.swayAmplitude * 0.65;
+          const swayZ = Math.cos(time * 1.5 + petal.windPhase * 1.4) * petal.swayAmplitude;
+
+          if (frameCount >= petal.fallDelay) {
+            petal.state = PETAL_STATE.FALLING;
+            petal.position.set(
+              petal.treePosition.x + swayX,
+              petal.treePosition.y + swayY,
+              petal.treePosition.z + swayZ
+            );
+            petal.velocity.set(swayX * 0.18, -0.003 - Math.random() * 0.002, swayZ * 0.18);
+          } else {
+            dummy.position.set(
+              petal.treePosition.x + swayX,
+              petal.treePosition.y + swayY,
+              petal.treePosition.z + swayZ
+            );
+            dummy.rotation.set(
+              petal.rotation.x + swayX * 12,
+              petal.rotation.y,
+              petal.rotation.z + swayZ * 12
+            );
+            dummy.scale.setScalar(petal.scale);
+            dummy.updateMatrix();
+            petalMesh.setMatrixAt(i, dummy.matrix);
+            matrixChanged = true;
+            onTree += 1;
+            continue;
+          }
+        }
+
+        const wind =
+          Math.sin(time * 0.8 + petal.windPhase) * PARAMS.windStrength +
+          Math.sin(time * 1.7 + petal.windPhase * 1.3) * PARAMS.windStrength * 0.4 +
+          Math.sin(time * 0.3 + petal.windPhase * 0.7) * PARAMS.windStrength * 0.6;
+
+        petal.velocity.y -= PARAMS.gravity;
+        petal.velocity.x += wind;
+        petal.velocity.z += Math.cos(time * 0.6 + petal.windPhase) * PARAMS.windStrength * 0.8;
         petal.velocity.multiplyScalar(PARAMS.airResistance);
         petal.position.add(petal.velocity);
-
         petal.rotation.x += petal.rotationSpeed.x;
         petal.rotation.y += petal.rotationSpeed.y;
         petal.rotation.z += petal.rotationSpeed.z;
 
-        if (petal.position.y < petal.groundY) {
-          petal.position.y = petal.groundY;
+        const distFromCenter = Math.hypot(petal.position.x, petal.position.z);
+        const groundLevel = distFromCenter < ISLAND_RADIUS ? GROUND_Y : GROUND_Y_OUTER;
+        if (petal.position.y <= groundLevel) {
+          petal.state = PETAL_STATE.ON_GROUND;
+          petal.position.y = groundLevel + petal.groundOffset;
           petal.velocity.set(0, 0, 0);
           petal.rotationSpeed.set(0, 0, 0);
-          petal.active = false;
-          petal.respawnAt = time + 1.2 + Math.random() * 1.5;
+          petal.rotation.set(
+            -Math.PI * 0.5 + (Math.random() - 0.5) * 0.18,
+            Math.random() * Math.PI * 2,
+            (Math.random() - 0.5) * 0.12
+          );
+          onGround += 1;
+        } else {
+          falling += 1;
         }
 
-        updatePetalMatrix(i);
+        dummy.position.copy(petal.position);
+        dummy.rotation.copy(petal.rotation);
+        dummy.scale.setScalar(petal.scale);
+        dummy.updateMatrix();
+        petalMesh.setMatrixAt(i, dummy.matrix);
+        matrixChanged = true;
       }
 
-      petalMesh.instanceMatrix.needsUpdate = true;
+      stats.onTree = onTree;
+      stats.falling = falling;
+      stats.onGround = onGround;
+
+      if (matrixChanged) {
+        petalMesh.instanceMatrix.needsUpdate = true;
+      }
     }
 
-    function initUI() {
-      const pane = new Pane({ title: 'Sakura Controls' });
+    function step(deltaSeconds) {
+      simTime += deltaSeconds;
+      frameCount += 1;
+      controls.update();
+      updatePetals(simTime);
+      refreshHud();
+    }
 
-      pane.addBinding(PARAMS, 'petalCount', {
-        min: 100,
-        max: 5000,
-        step: 100,
-        label: 'Petals',
-      }).on('change', (ev) => {
-        createPetals(ev.value);
+    function render() {
+      renderer.render(scene, camera);
+    }
+
+    function animate(now) {
+      requestAnimationFrame(animate);
+
+      const delta = Math.min(0.05, (now - lastFrameTime) * 0.001);
+      lastFrameTime = now;
+      accumulator += delta;
+
+      while (accumulator >= FIXED_DT) {
+        step(FIXED_DT);
+        accumulator -= FIXED_DT;
+      }
+
+      render();
+      updateFps(now);
+    }
+
+    function updateFps(now) {
+      fpsFrameCounter += 1;
+      if (now - fpsStamp >= 1000) {
+        fpsValue = Math.round((fpsFrameCounter * 1000) / (now - fpsStamp));
+        fpsFrameCounter = 0;
+        fpsStamp = now;
+        refreshHud();
+      }
+    }
+
+    function refreshHud() {
+      statsEl.textContent =
+        `fps ${fpsValue} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`;
+    }
+
+    function roundValue(value) {
+      return Math.round(value * 100) / 100;
+    }
+
+    function renderGameToText() {
+      const fallingSample = [];
+      for (let i = 0; i < petalData.length && fallingSample.length < 8; i += 1) {
+        const petal = petalData[i];
+        if (petal.state === PETAL_STATE.FALLING) {
+          fallingSample.push({
+            x: roundValue(petal.position.x),
+            y: roundValue(petal.position.y),
+            z: roundValue(petal.position.z),
+          });
+        }
+      }
+
+      return JSON.stringify({
+        coordinateSystem: 'origin=(0,0,0), +x=right, +y=up, +z=toward initial camera',
+        time: roundValue(simTime),
+        petals: {
+          total: PETAL_COUNT,
+          onTree: stats.onTree,
+          falling: stats.falling,
+          onGround: stats.onGround,
+        },
+        camera: {
+          x: roundValue(camera.position.x),
+          y: roundValue(camera.position.y),
+          z: roundValue(camera.position.z),
+        },
+        target: {
+          x: roundValue(controls.target.x),
+          y: roundValue(controls.target.y),
+          z: roundValue(controls.target.z),
+        },
+        fullscreen: Boolean(document.fullscreenElement),
+        fallingSample,
       });
+    }
 
-      pane.addBinding(PARAMS, 'windStrength', {
-        min: 0,
-        max: 0.02,
-        step: 0.001,
-        label: 'Wind',
-      });
-
-      pane.addBinding(PARAMS, 'gravity', {
-        min: 0.0001,
-        max: 0.003,
-        step: 0.0001,
-        label: 'Gravity',
-      });
-
-      pane.addBinding(PARAMS, 'airResistance', {
-        min: 0.9,
-        max: 0.999,
-        step: 0.001,
-        label: 'Air Resist',
-      });
-
-      pane.addBinding(PARAMS, 'autoRotate', { label: 'Auto Rotate' })
-        .on('change', (ev) => {
-          controls.autoRotate = ev.value;
-        });
+    function advanceTime(ms) {
+      const steps = Math.max(1, Math.round(ms / (FIXED_DT * 1000)));
+      accumulator = 0;
+      for (let i = 0; i < steps; i += 1) {
+        step(FIXED_DT);
+      }
+      render();
     }
 
     function onWindowResize() {
       const width = window.innerWidth;
       const height = window.innerHeight;
-
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      render();
     }
 
-    function updateFps(now) {
-      fpsFrames += 1;
-      if (now - fpsStamp >= 1000) {
-        const fps = Math.round((fpsFrames * 1000) / (now - fpsStamp));
-        fpsEl.textContent = `${fps} fps`;
-        fpsFrames = 0;
-        fpsStamp = now;
+    function onKeyDown(event) {
+      if (event.key.toLowerCase() === 'f') {
+        toggleFullscreen();
       }
     }
 
-    function animate() {
-      const elapsed = clock.getElapsedTime();
-      updatePetals(elapsed);
-      controls.update();
-      renderer.render(scene, camera);
-      updateFps(performance.now());
-      requestAnimationFrame(animate);
+    function toggleFullscreen() {
+      if (document.fullscreenElement) {
+        document.exitFullscreen?.();
+      } else {
+        document.documentElement.requestFullscreen?.();
+      }
     }
   </script>
 </body>
