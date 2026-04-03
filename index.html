@@ -232,6 +232,7 @@
     const MAX_PETAL_COUNT = 24000;
     const PETAL_STEP = 500;
     const PETAL_SIZE = 0.10;
+    const DEFAULT_GROUND_UPLOAD_BATCH = 1024;
     const GROUND_Y = 0.32;
     const GROUND_Y_OUTER = -0.20;
     const ISLAND_RADIUS = 3.2;
@@ -444,6 +445,9 @@
     let treePetalLayer = null;
     let fallingPetalLayer = null;
     let groundPetalLayer = null;
+    let groundLandingQueue = new Uint32Array(0);
+    let groundLandingQueueCount = 0;
+    let groundUploadBudget = DEFAULT_GROUND_UPLOAD_BATCH;
     let currentPetalCount = getInitialPetalCount();
     let simTime = 0;
     let frameCount = 0;
@@ -473,6 +477,7 @@
     window.render_game_to_text = renderGameToText;
     window.advanceTime = advanceTime;
     window.setPetalCount = setPetalCount;
+    window.setGroundUploadBudget = setGroundUploadBudget;
 
     requestAnimationFrame(animate);
 
@@ -591,7 +596,7 @@
       renderer.sortObjects = true;
 
       controls = new OrbitControls(camera, renderer.domElement);
-      controls.autoRotate = true;
+      controls.autoRotate = false;
       controls.autoRotateSpeed = AUTO_ROTATE_SPEED;
       controls.enableDamping = true;
       controls.dampingFactor = 0.05;
@@ -1023,6 +1028,8 @@
       treePetalLayer = buildTreePetalLayer(count);
       groundPetalLayer = buildDynamicPetalLayer(count, COLORS.petalGround, 2);
       fallingPetalLayer = buildDynamicPetalLayer(count, COLORS.petal, 5);
+      groundLandingQueue = new Uint32Array(count);
+      groundLandingQueueCount = 0;
 
       scene.add(groundPetalLayer.mesh, treePetalLayer.mesh, fallingPetalLayer.mesh);
       seedPetalsInWasm(count);
@@ -1046,15 +1053,25 @@
       markAttributeRange(treePetalLayer.attributes.visible, startIndex, count);
     }
 
-    function appendGroundPetals(landedCount) {
+    function queueGroundPetals(landedCount) {
       if (landedCount <= 0) {
         return;
       }
 
+      groundLandingQueue.set(wasmViews.landedIndices.subarray(0, landedCount), groundLandingQueueCount);
+      groundLandingQueueCount += landedCount;
+    }
+
+    function flushGroundQueue(maxBatch = groundUploadBudget) {
+      const flushCount = Math.min(groundLandingQueueCount, maxBatch);
+      if (flushCount <= 0) {
+        return 0;
+      }
+
       const startSlot = groundPetalLayer.count;
-      for (let i = 0; i < landedCount; i += 1) {
+      for (let i = 0; i < flushCount; i += 1) {
         const slot = startSlot + i;
-        const index = wasmViews.landedIndices[i];
+        const index = groundLandingQueue[i];
         writeVec3(
           groundPetalLayer.arrays.offsets,
           slot,
@@ -1073,12 +1090,18 @@
         groundPetalLayer.arrays.brightness[slot] = Math.max(0.76, wasmViews.brightness[index] * 0.88);
       }
 
-      groundPetalLayer.count += landedCount;
+      if (flushCount < groundLandingQueueCount) {
+        groundLandingQueue.copyWithin(0, flushCount, groundLandingQueueCount);
+      }
+      groundLandingQueueCount -= flushCount;
+
+      groundPetalLayer.count += flushCount;
       groundPetalLayer.geometry.instanceCount = groundPetalLayer.count;
-      markAttributeRange(groundPetalLayer.attributes.offsets, startSlot * 3, landedCount * 3);
-      markAttributeRange(groundPetalLayer.attributes.rotations, startSlot * 3, landedCount * 3);
-      markAttributeRange(groundPetalLayer.attributes.scales, startSlot, landedCount);
-      markAttributeRange(groundPetalLayer.attributes.brightness, startSlot, landedCount);
+      markAttributeRange(groundPetalLayer.attributes.offsets, startSlot * 3, flushCount * 3);
+      markAttributeRange(groundPetalLayer.attributes.rotations, startSlot * 3, flushCount * 3);
+      markAttributeRange(groundPetalLayer.attributes.scales, startSlot, flushCount);
+      markAttributeRange(groundPetalLayer.attributes.brightness, startSlot, flushCount);
+      return flushCount;
     }
 
     function syncFallingLayerFromWasm() {
@@ -1136,14 +1159,15 @@
         GROUND_Y_OUTER
       );
 
-      appendGroundPetals(landedCount);
+      queueGroundPetals(landedCount);
+      flushGroundQueue();
 
       syncFallingLayerFromWasm();
       treePetalLayer.material.uniforms.time.value = time;
 
       stats.falling = sakuraWasm.sim_active_count();
-      stats.onTree = currentPetalCount - stats.falling - groundPetalLayer.count;
-      stats.onGround = groundPetalLayer.count;
+      stats.onGround += landedCount;
+      stats.onTree = currentPetalCount - stats.falling - stats.onGround;
     }
 
     function step(deltaSeconds) {
@@ -1236,6 +1260,15 @@
       return currentPetalCount;
     }
 
+    function setGroundUploadBudget(nextBudget) {
+      const numeric = Number.isFinite(nextBudget) ? Math.floor(nextBudget) : DEFAULT_GROUND_UPLOAD_BATCH;
+      groundUploadBudget = THREE.MathUtils.clamp(numeric, 1, 8192);
+      flushGroundQueue();
+      refreshHud();
+      render();
+      return groundUploadBudget;
+    }
+
     function initPetalControls() {
       syncPetalInputs(currentPetalCount);
 
@@ -1292,6 +1325,8 @@
           treeInstances: treePetalLayer?.geometry.instanceCount ?? 0,
           fallingInstances: fallingPetalLayer?.geometry.instanceCount ?? 0,
           groundInstances: groundPetalLayer?.geometry.instanceCount ?? 0,
+          pendingGroundUploads: groundLandingQueueCount,
+          groundUploadBudget,
         },
         fullscreen: Boolean(document.fullscreenElement),
         fallingSample,

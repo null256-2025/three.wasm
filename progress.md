@@ -60,6 +60,10 @@ Original prompt: [sakura_final_spec.md](sakura_final_spec.md) を基に実装し
 - 2026-04-03: Phase 2 follow-up: `FALLING` and `ON_GROUND` layer uploads now mark only the touched buffer ranges instead of flagging the entire attribute payload every frame. Tree visibility updates also upload only the changed span.
 - 2026-04-03: Cleaned `index.html` runtime strings and source structure around HUD/title/hint text. Removed duplicate `refreshHud*` overrides and aligned the HTML text with the runtime text.
 - 2026-04-03: Re-verified after the partial-upload change: `npm run build:wasm` succeeds, console errors remain at 0, `advanceTime(3000)` still advances falling/landing, `setPetalCount(16000)` / `24000` rebuild correctly, and fullscreen toggle still works.
+- 2026-04-03: Reworked `ON_GROUND` into a queued upload path. Landed petals are first appended to `groundLandingQueue`, then flushed to the ground layer with a per-frame `groundUploadBudget`.
+- 2026-04-03: Added `window.setGroundUploadBudget(count)` and exposed `pendingGroundUploads` in `render_game_to_text()` so larger-count experiments can observe backlog growth and drain behavior.
+- 2026-04-03: Verified the queue behavior at `24000` petals: with `setGroundUploadBudget(1)` backlog grows (`pendingGroundUploads > 0`), and with `setGroundUploadBudget(8192)` it drains back to 0 while rendering stays stable and console errors remain 0.
+- 2026-04-03: Disabled OrbitControls auto-rotate so the camera stays still unless the user drags. This avoids constant motion during review and testing.
 - TODO: Consider a deeper partial-upload pass that avoids rewriting the whole active prefix when slot order changes under high churn.
 - TODO: Clean up the remaining mojibake source lines in `index.html` once file encoding is normalized; runtime text is already overwritten with correct Japanese strings.
-- TODO: Decide whether landed petals should remain in JS-only append mode or also move to a Wasm-driven compact ground buffer for larger-count phases.
+- TODO: For the 100k phase, decide whether to keep the JS-side `groundLandingQueue` or move compaction / queueing into Wasm as well.
