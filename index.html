@@ -203,21 +203,22 @@
         <div id="petal-panel" class="chip">
           <div>Petals</div>
           <div id="petal-row">
-            <input id="petal-range" type="range" min="1000" max="24000" step="500" value="2000" />
-            <input id="petal-number" type="number" min="1000" max="24000" step="500" value="2000" />
+            <input id="petal-range" type="range" min="1000" max="100000" step="500" value="2000" />
+            <input id="petal-number" type="number" min="1000" max="100000" step="500" value="2000" />
           </div>
           <div id="petal-presets">
             <button class="preset-btn" type="button" data-petals="2000">2000</button>
-            <button class="preset-btn" type="button" data-petals="8000">8000</button>
             <button class="preset-btn" type="button" data-petals="16000">16000</button>
             <button class="preset-btn" type="button" data-petals="24000">24000</button>
+            <button class="preset-btn" type="button" data-petals="50000">50000</button>
+            <button class="preset-btn" type="button" data-petals="100000">100000</button>
           </div>
         </div>
       </div>
     </div>
     <div></div>
     <div id="footer">
-      <div id="hint" class="chip">ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ Wasm 実装中の表示上限は 24000</div>
+      <div id="hint" class="chip">ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ 50000枚超では自動で軽量描画に切り替え</div>
     </div>
   </div>
 
@@ -229,7 +230,7 @@
 
     const DEFAULT_PETAL_COUNT = 2000;
     const MIN_PETAL_COUNT = 1000;
-    const MAX_PETAL_COUNT = 24000;
+    const MAX_PETAL_COUNT = 100000;
     const PETAL_STEP = 500;
     const PETAL_SIZE = 0.10;
     const DEFAULT_GROUND_UPLOAD_BATCH = 1024;
@@ -237,6 +238,8 @@
     const TREE_UPLOAD_BYTES_PER_INSTANCE = 36;
     const DYNAMIC_UPLOAD_BYTES_PER_INSTANCE = 32;
     const PERF_SAMPLE_ALPHA = 0.16;
+    const DENSE_COUNT_THRESHOLD = 50000;
+    const ULTRA_COUNT_THRESHOLD = 80000;
     const GROUND_Y = 0.32;
     const GROUND_Y_OUTER = -0.20;
     const ISLAND_RADIUS = 3.2;
@@ -411,6 +414,21 @@
       }
     `;
 
+    const DENSE_PETAL_FRAGMENT_SHADER = `
+      uniform vec3 color;
+
+      varying vec2 vUv;
+      varying float vBrightness;
+
+      void main() {
+        vec2 uv = vUv - 0.5;
+        float centerGlow = clamp(1.0 - dot(uv * 1.8, uv * 1.4), 0.0, 1.0);
+        vec3 lit = color * vBrightness;
+        lit += centerGlow * 0.05;
+        gl_FragColor = vec4(lit, 1.0);
+      }
+    `;
+
     const BLOSSOM_POSITIONS = [];
     const statsEl = document.getElementById('stats');
     const canvas = document.getElementById('scene');
@@ -497,6 +515,8 @@
       activeQuery: null,
       isWebGL2: false,
     };
+
+    let currentQualityProfile = resolveQualityProfile(currentPetalCount);
 
     initScene();
     createBackdrop();
@@ -664,6 +684,57 @@
       gpuTimer.activeQuery = null;
     }
 
+    function resolveQualityProfile(count) {
+      if (count >= ULTRA_COUNT_THRESHOLD) {
+        return {
+          id: 'ultra',
+          label: 'ultra',
+          pixelRatioCap: 0.75,
+          renderScale: 0.82,
+          simplifiedPetals: true,
+          transparentPetals: false,
+          depthWrite: true,
+          defaultGroundBudget: 4096,
+        };
+      }
+
+      if (count >= DENSE_COUNT_THRESHOLD) {
+        return {
+          id: 'dense',
+          label: 'dense',
+          pixelRatioCap: 0.9,
+          renderScale: 0.9,
+          simplifiedPetals: true,
+          transparentPetals: false,
+          depthWrite: true,
+          defaultGroundBudget: 2048,
+        };
+      }
+
+      return {
+        id: 'standard',
+        label: 'standard',
+        pixelRatioCap: 2,
+        renderScale: 1,
+        simplifiedPetals: false,
+        transparentPetals: true,
+        depthWrite: false,
+        defaultGroundBudget: DEFAULT_GROUND_UPLOAD_BATCH,
+      };
+    }
+
+    function getRendererPixelRatio() {
+      const devicePixelRatio = window.devicePixelRatio || 1;
+      return Math.min(devicePixelRatio, currentQualityProfile.pixelRatioCap) * currentQualityProfile.renderScale;
+    }
+
+    function applyRendererQuality() {
+      if (!renderer) {
+        return;
+      }
+      renderer.setPixelRatio(getRendererPixelRatio());
+    }
+
     function createBlossomUpload() {
       const values = new Float32Array(BLOSSOM_POSITIONS.length * 3);
       for (let i = 0; i < BLOSSOM_POSITIONS.length; i += 1) {
@@ -732,7 +803,7 @@
         alpha: true,
         powerPreference: 'high-performance',
       });
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      applyRendererQuality();
       renderer.setSize(window.innerWidth, window.innerHeight, false);
       renderer.outputColorSpace = THREE.SRGBColorSpace;
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -1009,8 +1080,32 @@
       }
     }
 
+    function createDensePetalGeometry() {
+      const width = PETAL_SIZE * 0.95;
+      const height = PETAL_SIZE * 1.18;
+      const positions = new Float32Array([
+        0.0, height * 0.58, 0.0,
+        -width * 0.52, height * 0.08, 0.0,
+        0.0, -height * 0.62, 0.0,
+        width * 0.52, height * 0.08, 0.0,
+      ]);
+      const uvs = new Float32Array([
+        0.5, 1.0,
+        0.0, 0.56,
+        0.5, 0.0,
+        1.0, 0.56,
+      ]);
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+      geometry.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      geometry.setIndex([0, 1, 2, 0, 2, 3]);
+      return geometry;
+    }
+
     function createInstancedPetalGeometry() {
-      const base = new THREE.PlaneGeometry(PETAL_SIZE * 1.45, PETAL_SIZE);
+      const base = currentQualityProfile.simplifiedPetals
+        ? createDensePetalGeometry()
+        : new THREE.PlaneGeometry(PETAL_SIZE * 1.45, PETAL_SIZE);
       const geometry = new THREE.InstancedBufferGeometry().copy(base);
       base.dispose();
       return geometry;
@@ -1023,10 +1118,10 @@
           ...extraUniforms,
         },
         vertexShader,
-        fragmentShader: PETAL_FRAGMENT_SHADER,
-        transparent: true,
+        fragmentShader: currentQualityProfile.simplifiedPetals ? DENSE_PETAL_FRAGMENT_SHADER : PETAL_FRAGMENT_SHADER,
+        transparent: currentQualityProfile.transparentPetals,
         side: THREE.DoubleSide,
-        depthWrite: false,
+        depthWrite: currentQualityProfile.depthWrite,
       });
     }
 
@@ -1210,6 +1305,9 @@
 
     function createPetals(count) {
       disposePetals();
+      currentQualityProfile = resolveQualityProfile(count);
+      groundUploadBudget = currentQualityProfile.defaultGroundBudget;
+      applyRendererQuality();
 
       treePetalLayer = buildTreePetalLayer(count);
       groundPetalLayer = buildDynamicPetalLayer(count, COLORS.petalGround, 2);
@@ -1485,7 +1583,7 @@
       const uploadKilobytes = Math.round(perfStats.uploadedBytesPerFrame / 1024);
       statsEl.textContent = [
         `fps ${fpsValue} | petals ${currentPetalCount} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`,
-        `cpu ${roundValue(perfStats.frameCpuMs)}ms | render ${roundValue(perfStats.renderCpuMs)}ms | gpu ${gpuLabel} | upload ${uploadKilobytes}KB | bottleneck ${perfStats.bottleneck}`,
+        `cpu ${roundValue(perfStats.frameCpuMs)}ms | render ${roundValue(perfStats.renderCpuMs)}ms | gpu ${gpuLabel} | upload ${uploadKilobytes}KB | mode ${currentQualityProfile.label} | bottleneck ${perfStats.bottleneck}`,
       ].join('\n');
     }
 
@@ -1604,6 +1702,8 @@
           pendingGroundUploads: groundLandingQueueCount,
           groundUploadBudget,
           queueCapacity: groundLandingQueue.length,
+          qualityMode: currentQualityProfile.id,
+          rendererPixelRatio: roundValue(renderer.getPixelRatio()),
         },
         perf: {
           bottleneck: perfStats.bottleneck,
@@ -1646,7 +1746,7 @@
       camera.aspect = width / height;
       camera.updateProjectionMatrix();
       renderer.setSize(width, height, false);
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+      applyRendererQuality();
       render();
     }
 
