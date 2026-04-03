@@ -237,23 +237,12 @@
     const ISLAND_RADIUS = 3.2;
     const AUTO_ROTATE_SPEED = 0.3;
     const FIXED_DT = 1 / 60;
+    const WASM_PATH = './target/wasm32-unknown-unknown/release/sakura_sim.wasm';
 
     const PARAMS = {
       windStrength: 0.002,
       gravity: 0.0006,
       airResistance: 0.97,
-    };
-
-    const PETAL_STATE = {
-      ON_TREE: 0,
-      FALLING: 1,
-      ON_GROUND: 2,
-    };
-
-    const TREE_SWAY = {
-      x: { speed: 1.35, amplitude: 0.013, phase: 1.0, fn: Math.sin },
-      y: { speed: 1.05, amplitude: 0.007, phase: 0.6, fn: Math.cos },
-      z: { speed: 1.45, amplitude: 0.013, phase: 1.2, fn: Math.cos },
     };
 
     const COLORS = {
@@ -419,8 +408,6 @@
     `;
 
     const BLOSSOM_POSITIONS = [];
-    const petalData = [];
-    const swayScratch = new THREE.Vector3();
     const statsEl = document.getElementById('stats');
     const canvas = document.getElementById('scene');
     const petalRangeEl = document.getElementById('petal-range');
@@ -428,6 +415,29 @@
     const presetButtonEls = Array.from(document.querySelectorAll('[data-petals]'));
     const titleSubtitleEl = document.querySelector('#title span');
     const hintEl = document.getElementById('hint');
+    const sakuraWasm = await loadSakuraWasm();
+
+    const wasmViews = {
+      count: 0,
+      posX: null,
+      posY: null,
+      posZ: null,
+      rotX: null,
+      rotY: null,
+      rotZ: null,
+      treePosX: null,
+      treePosY: null,
+      treePosZ: null,
+      treeRotX: null,
+      treeRotY: null,
+      treeRotZ: null,
+      phase: null,
+      scale: null,
+      brightness: null,
+      activeIndices: null,
+      activatedIndices: null,
+      landedIndices: null,
+    };
 
     let scene;
     let camera;
@@ -454,6 +464,9 @@
     titleSubtitleEl.textContent = '花びらがほどけていく流れを、木の上から地面まで静かに追いかける。';
     hintEl.textContent = 'ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ Wasm 実装前の表示上限は 24000';
 
+    titleSubtitleEl.textContent = '花びらがほどけていく流れを、木の上から地面まで静かに追いかける。';
+    hintEl.textContent = 'ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ Wasm 実装中の表示上限は 24000';
+
     initScene();
     createBackdrop();
     createGround();
@@ -470,6 +483,99 @@
     window.setPetalCount = setPetalCount;
 
     requestAnimationFrame(animate);
+
+    async function loadSakuraWasm() {
+      const response = await fetch(WASM_PATH);
+      try {
+        if (WebAssembly.instantiateStreaming) {
+          const { instance } = await WebAssembly.instantiateStreaming(response.clone(), {});
+          return instance.exports;
+        }
+      } catch (error) {
+        console.warn('Falling simulation streaming compile failed, retrying with arrayBuffer.', error);
+      }
+
+      const bytes = await response.arrayBuffer();
+      const { instance } = await WebAssembly.instantiate(bytes, {});
+      return instance.exports;
+    }
+
+    function refreshWasmViews() {
+      const count = sakuraWasm.sim_petal_count();
+      const memory = sakuraWasm.memory.buffer;
+
+      wasmViews.count = count;
+      wasmViews.posX = new Float32Array(memory, sakuraWasm.sim_pos_x_ptr(), count);
+      wasmViews.posY = new Float32Array(memory, sakuraWasm.sim_pos_y_ptr(), count);
+      wasmViews.posZ = new Float32Array(memory, sakuraWasm.sim_pos_z_ptr(), count);
+      wasmViews.rotX = new Float32Array(memory, sakuraWasm.sim_rot_x_ptr(), count);
+      wasmViews.rotY = new Float32Array(memory, sakuraWasm.sim_rot_y_ptr(), count);
+      wasmViews.rotZ = new Float32Array(memory, sakuraWasm.sim_rot_z_ptr(), count);
+      wasmViews.treePosX = new Float32Array(memory, sakuraWasm.sim_tree_pos_x_ptr(), count);
+      wasmViews.treePosY = new Float32Array(memory, sakuraWasm.sim_tree_pos_y_ptr(), count);
+      wasmViews.treePosZ = new Float32Array(memory, sakuraWasm.sim_tree_pos_z_ptr(), count);
+      wasmViews.treeRotX = new Float32Array(memory, sakuraWasm.sim_tree_rot_x_ptr(), count);
+      wasmViews.treeRotY = new Float32Array(memory, sakuraWasm.sim_tree_rot_y_ptr(), count);
+      wasmViews.treeRotZ = new Float32Array(memory, sakuraWasm.sim_tree_rot_z_ptr(), count);
+      wasmViews.phase = new Float32Array(memory, sakuraWasm.sim_phase_ptr(), count);
+      wasmViews.scale = new Float32Array(memory, sakuraWasm.sim_scale_ptr(), count);
+      wasmViews.brightness = new Float32Array(memory, sakuraWasm.sim_brightness_ptr(), count);
+      wasmViews.activeIndices = new Uint32Array(memory, sakuraWasm.sim_active_indices_ptr(), count);
+      wasmViews.activatedIndices = new Uint32Array(memory, sakuraWasm.sim_activated_indices_ptr(), count);
+      wasmViews.landedIndices = new Uint32Array(memory, sakuraWasm.sim_landed_indices_ptr(), count);
+    }
+
+    function createBlossomUpload() {
+      const values = new Float32Array(BLOSSOM_POSITIONS.length * 3);
+      for (let i = 0; i < BLOSSOM_POSITIONS.length; i += 1) {
+        const offset = i * 3;
+        const position = BLOSSOM_POSITIONS[i];
+        values[offset] = position.x;
+        values[offset + 1] = position.y;
+        values[offset + 2] = position.z;
+      }
+      return values;
+    }
+
+    function seedPetalsInWasm(count) {
+      sakuraWasm.sim_init(count);
+      const blossomUpload = createBlossomUpload();
+      const ptr = sakuraWasm.alloc_f32(blossomUpload.length);
+      new Float32Array(sakuraWasm.memory.buffer, ptr, blossomUpload.length).set(blossomUpload);
+      sakuraWasm.sim_seed_petals((Math.random() * 0xffffffff) >>> 0 || 1, ptr, blossomUpload.length);
+      sakuraWasm.free_f32(ptr, blossomUpload.length);
+      refreshWasmViews();
+    }
+
+    function populateTreeLayerFromWasm() {
+      for (let i = 0; i < wasmViews.count; i += 1) {
+        writeVec3(
+          treePetalLayer.arrays.baseOffset,
+          i,
+          wasmViews.treePosX[i],
+          wasmViews.treePosY[i],
+          wasmViews.treePosZ[i]
+        );
+        writeVec3(
+          treePetalLayer.arrays.baseRotation,
+          i,
+          wasmViews.treeRotX[i],
+          wasmViews.treeRotY[i],
+          wasmViews.treeRotZ[i]
+        );
+        treePetalLayer.arrays.phase[i] = wasmViews.phase[i];
+        treePetalLayer.arrays.scale[i] = wasmViews.scale[i];
+        treePetalLayer.arrays.brightness[i] = wasmViews.brightness[i];
+        treePetalLayer.arrays.visible[i] = 1;
+      }
+
+      treePetalLayer.attributes.baseOffset.needsUpdate = true;
+      treePetalLayer.attributes.baseRotation.needsUpdate = true;
+      treePetalLayer.attributes.phase.needsUpdate = true;
+      treePetalLayer.attributes.scale.needsUpdate = true;
+      treePetalLayer.attributes.brightness.needsUpdate = true;
+      treePetalLayer.attributes.visible.needsUpdate = true;
+    }
 
     function initScene() {
       scene = new THREE.Scene();
@@ -898,7 +1004,6 @@
       treePetalLayer = null;
       fallingPetalLayer = null;
       groundPetalLayer = null;
-      petalData.length = 0;
     }
 
     function createPetals(count) {
@@ -909,54 +1014,8 @@
       fallingPetalLayer = buildDynamicPetalLayer(count, COLORS.petal, 5);
 
       scene.add(groundPetalLayer.mesh, treePetalLayer.mesh, fallingPetalLayer.mesh);
-
-      for (let i = 0; i < count; i += 1) {
-        const origin = BLOSSOM_POSITIONS[(Math.random() * BLOSSOM_POSITIONS.length) | 0];
-        const treePosition = new THREE.Vector3(
-          origin.x + (Math.random() - 0.5) * 0.24,
-          origin.y + (Math.random() - 0.5) * 0.14,
-          origin.z + (Math.random() - 0.5) * 0.24
-        );
-        const rotation = new THREE.Vector3(
-          (Math.random() - 0.5) * 0.8,
-          Math.random() * Math.PI * 2,
-          (Math.random() - 0.5) * 0.8
-        );
-
-        const petal = {
-          state: PETAL_STATE.ON_TREE,
-          treePosition,
-          position: treePosition.clone(),
-          velocity: new THREE.Vector3(),
-          rotation,
-          rotationSpeed: new THREE.Vector3(
-            (Math.random() - 0.5) * 0.04,
-            (Math.random() - 0.5) * 0.02,
-            (Math.random() - 0.5) * 0.04
-          ),
-          windPhase: Math.random() * Math.PI * 2,
-          fallDelay: 180 + Math.floor(Math.random() * 3600),
-          scale: 0.96 + Math.random() * 0.58,
-          brightness: 0.88 + Math.random() * 0.24,
-          groundOffset: Math.random() * 0.01,
-        };
-
-        petalData.push(petal);
-
-        writeVec3(treePetalLayer.arrays.baseOffset, i, treePosition.x, treePosition.y, treePosition.z);
-        writeVec3(treePetalLayer.arrays.baseRotation, i, rotation.x, rotation.y, rotation.z);
-        treePetalLayer.arrays.phase[i] = petal.windPhase;
-        treePetalLayer.arrays.scale[i] = petal.scale;
-        treePetalLayer.arrays.brightness[i] = petal.brightness;
-        treePetalLayer.arrays.visible[i] = 1;
-      }
-
-      treePetalLayer.attributes.baseOffset.needsUpdate = true;
-      treePetalLayer.attributes.baseRotation.needsUpdate = true;
-      treePetalLayer.attributes.phase.needsUpdate = true;
-      treePetalLayer.attributes.scale.needsUpdate = true;
-      treePetalLayer.attributes.brightness.needsUpdate = true;
-      treePetalLayer.attributes.visible.needsUpdate = true;
+      seedPetalsInWasm(count);
+      populateTreeLayerFromWasm();
 
       fallingPetalLayer.count = 0;
       fallingPetalLayer.geometry.instanceCount = 0;
@@ -968,26 +1027,32 @@
       stats.onGround = 0;
     }
 
-    function getTreeSway(position, phase, time, target) {
-      target.set(
-        position.x + TREE_SWAY.x.fn(time * TREE_SWAY.x.speed + phase * TREE_SWAY.x.phase) * TREE_SWAY.x.amplitude,
-        position.y + TREE_SWAY.y.fn(time * TREE_SWAY.y.speed + phase * TREE_SWAY.y.phase) * TREE_SWAY.y.amplitude,
-        position.z + TREE_SWAY.z.fn(time * TREE_SWAY.z.speed + phase * TREE_SWAY.z.phase) * TREE_SWAY.z.amplitude
-      );
-      return target;
-    }
-
     function hideTreePetal(index) {
       treePetalLayer.arrays.visible[index] = 0;
+    }
+
+    function flushTreeVisibility() {
       treePetalLayer.attributes.visible.needsUpdate = true;
     }
 
-    function appendGroundPetal(petal) {
+    function appendGroundPetal(index) {
       const slot = groundPetalLayer.count;
-      writeVec3(groundPetalLayer.arrays.offsets, slot, petal.position.x, petal.position.y, petal.position.z);
-      writeVec3(groundPetalLayer.arrays.rotations, slot, petal.rotation.x, petal.rotation.y, petal.rotation.z);
-      groundPetalLayer.arrays.scales[slot] = petal.scale;
-      groundPetalLayer.arrays.brightness[slot] = Math.max(0.76, petal.brightness * 0.88);
+      writeVec3(
+        groundPetalLayer.arrays.offsets,
+        slot,
+        wasmViews.posX[index],
+        wasmViews.posY[index],
+        wasmViews.posZ[index]
+      );
+      writeVec3(
+        groundPetalLayer.arrays.rotations,
+        slot,
+        wasmViews.rotX[index],
+        wasmViews.rotY[index],
+        wasmViews.rotZ[index]
+      );
+      groundPetalLayer.arrays.scales[slot] = wasmViews.scale[index];
+      groundPetalLayer.arrays.brightness[slot] = Math.max(0.76, wasmViews.brightness[index] * 0.88);
 
       groundPetalLayer.count += 1;
       groundPetalLayer.geometry.instanceCount = groundPetalLayer.count;
@@ -997,7 +1062,28 @@
       groundPetalLayer.attributes.brightness.needsUpdate = true;
     }
 
-    function syncFallingLayer(activeCount) {
+    function syncFallingLayerFromWasm() {
+      const activeCount = sakuraWasm.sim_active_count();
+      for (let slot = 0; slot < activeCount; slot += 1) {
+        const index = wasmViews.activeIndices[slot];
+        writeVec3(
+          fallingPetalLayer.arrays.offsets,
+          slot,
+          wasmViews.posX[index],
+          wasmViews.posY[index],
+          wasmViews.posZ[index]
+        );
+        writeVec3(
+          fallingPetalLayer.arrays.rotations,
+          slot,
+          wasmViews.rotX[index],
+          wasmViews.rotY[index],
+          wasmViews.rotZ[index]
+        );
+        fallingPetalLayer.arrays.scales[slot] = wasmViews.scale[index];
+        fallingPetalLayer.arrays.brightness[slot] = wasmViews.brightness[index];
+      }
+
       fallingPetalLayer.count = activeCount;
       fallingPetalLayer.geometry.instanceCount = activeCount;
       fallingPetalLayer.attributes.offsets.needsUpdate = true;
@@ -1007,77 +1093,34 @@
     }
 
     function updatePetals(time) {
-      let onTree = 0;
-      let falling = 0;
-      let activeCount = 0;
-
-      for (let i = 0; i < petalData.length; i += 1) {
-        const petal = petalData[i];
-
-        if (petal.state === PETAL_STATE.ON_TREE && frameCount >= petal.fallDelay) {
-          getTreeSway(petal.treePosition, petal.windPhase, time, swayScratch);
-          petal.state = PETAL_STATE.FALLING;
-          petal.position.copy(swayScratch);
-          petal.velocity.set(
-            (swayScratch.x - petal.treePosition.x) * 0.12,
-            -0.003 - Math.random() * 0.002,
-            (swayScratch.z - petal.treePosition.z) * 0.12
-          );
-          hideTreePetal(i);
-        }
-
-        if (petal.state === PETAL_STATE.ON_TREE) {
-          onTree += 1;
-          continue;
-        }
-
-        if (petal.state === PETAL_STATE.ON_GROUND) {
-          continue;
-        }
-
-        const wind =
-          Math.sin(time * 0.8 + petal.windPhase) * PARAMS.windStrength +
-          Math.sin(time * 1.7 + petal.windPhase * 1.3) * PARAMS.windStrength * 0.4 +
-          Math.sin(time * 0.3 + petal.windPhase * 0.7) * PARAMS.windStrength * 0.6;
-
-        petal.velocity.y -= PARAMS.gravity;
-        petal.velocity.x += wind;
-        petal.velocity.z += Math.cos(time * 0.6 + petal.windPhase) * PARAMS.windStrength * 0.8;
-        petal.velocity.multiplyScalar(PARAMS.airResistance);
-        petal.position.add(petal.velocity);
-        petal.rotation.x += petal.rotationSpeed.x;
-        petal.rotation.y += petal.rotationSpeed.y;
-        petal.rotation.z += petal.rotationSpeed.z;
-
-        const distFromCenter = Math.hypot(petal.position.x, petal.position.z);
-        const groundLevel = distFromCenter < ISLAND_RADIUS ? GROUND_Y : GROUND_Y_OUTER;
-        if (petal.position.y <= groundLevel) {
-          petal.state = PETAL_STATE.ON_GROUND;
-          petal.position.y = groundLevel + petal.groundOffset;
-          petal.velocity.set(0, 0, 0);
-          petal.rotationSpeed.set(0, 0, 0);
-          petal.rotation.set(
-            -Math.PI * 0.5 + (Math.random() - 0.5) * 0.18,
-            Math.random() * Math.PI * 2,
-            (Math.random() - 0.5) * 0.12
-          );
-          appendGroundPetal(petal);
-          continue;
-        }
-
-        writeVec3(fallingPetalLayer.arrays.offsets, activeCount, petal.position.x, petal.position.y, petal.position.z);
-        writeVec3(fallingPetalLayer.arrays.rotations, activeCount, petal.rotation.x, petal.rotation.y, petal.rotation.z);
-        fallingPetalLayer.arrays.scales[activeCount] = petal.scale;
-        fallingPetalLayer.arrays.brightness[activeCount] = petal.brightness;
-        activeCount += 1;
-        falling += 1;
+      const activatedCount = sakuraWasm.sim_activate_ready_petals(frameCount, time);
+      for (let i = 0; i < activatedCount; i += 1) {
+        hideTreePetal(wasmViews.activatedIndices[i]);
+      }
+      if (activatedCount > 0) {
+        flushTreeVisibility();
       }
 
-      syncFallingLayer(activeCount);
+      const landedCount = sakuraWasm.sim_step_falling(
+        FIXED_DT,
+        time,
+        PARAMS.windStrength,
+        PARAMS.gravity,
+        PARAMS.airResistance,
+        ISLAND_RADIUS,
+        GROUND_Y,
+        GROUND_Y_OUTER
+      );
+
+      for (let i = 0; i < landedCount; i += 1) {
+        appendGroundPetal(wasmViews.landedIndices[i]);
+      }
+
+      syncFallingLayerFromWasm();
       treePetalLayer.material.uniforms.time.value = time;
 
-      stats.onTree = onTree;
-      stats.falling = falling;
+      stats.falling = sakuraWasm.sim_active_count();
+      stats.onTree = currentPetalCount - stats.falling - groundPetalLayer.count;
       stats.onGround = groundPetalLayer.count;
     }
 
@@ -1139,6 +1182,11 @@
       return THREE.MathUtils.clamp(stepped, MIN_PETAL_COUNT, MAX_PETAL_COUNT);
     }
 
+    refreshHud = function refreshHudWasm() {
+      statsEl.textContent =
+        `fps ${fpsValue} | petals ${currentPetalCount} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`;
+    };
+
     function getInitialPetalCount() {
       const params = new URLSearchParams(window.location.search);
       const urlValue = Number.parseInt(params.get('petals') || '', 10);
@@ -1199,15 +1247,14 @@
 
     function renderGameToText() {
       const fallingSample = [];
-      for (let i = 0; i < petalData.length && fallingSample.length < 8; i += 1) {
-        const petal = petalData[i];
-        if (petal.state === PETAL_STATE.FALLING) {
-          fallingSample.push({
-            x: roundValue(petal.position.x),
-            y: roundValue(petal.position.y),
-            z: roundValue(petal.position.z),
-          });
-        }
+      const activeCount = sakuraWasm.sim_active_count();
+      for (let i = 0; i < activeCount && fallingSample.length < 8; i += 1) {
+        const index = wasmViews.activeIndices[i];
+        fallingSample.push({
+          x: roundValue(wasmViews.posX[index]),
+          y: roundValue(wasmViews.posY[index]),
+          z: roundValue(wasmViews.posZ[index]),
+        });
       }
 
       return JSON.stringify({

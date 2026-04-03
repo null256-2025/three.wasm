@@ -4,6 +4,8 @@
   "private": true,
   "description": "A single-file sakura scene built with three.js.",
   "scripts": {
-    "start": "npx serve ."
+    "start": "npx serve .",
+    "build:wasm": "node scripts/run-cargo.js build --target wasm32-unknown-unknown --release",
+    "build:wasm:dev": "node scripts/run-cargo.js build --target wasm32-unknown-unknown"
   }
 }

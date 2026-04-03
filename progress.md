@@ -47,5 +47,16 @@ Original prompt: [sakura_final_spec.md](sakura_final_spec.md) を基に実装し
 - 2026-04-03: Added URL sync for `?petals=` when preset buttons or controls change the petal count.
 - 2026-04-03: Verified in Playwright at `http://127.0.0.1:3001/index.html` for 2000, 16000, and 24000 petals.
 - 2026-04-03: Verified `advanceTime(3000)` changes counts correctly, preset-button UI updates URL/state, and fullscreen toggles on/off with `f`.
+- 2026-04-03: Started Phase 2 scaffolding. Added `Cargo.toml`, `src/lib.rs`, Rust `SakuraSim` SoA buffers, and the planned exported API for seeding / activation / falling / pointer access.
+- 2026-04-03: Added `npm run build:wasm` and `npm run build:wasm:dev` scripts, and ignored `pkg/` / `target/`.
+- 2026-04-03: `cargo` / `wasm-pack` are still missing on this machine, so the new Rust crate has not been compiled or integrated into `index.html` yet.
 - TODO: Move the current JS falling simulation state to Wasm SoA buffers from `sakura_final_spec_wasm.md`.
 - TODO: Replace full falling-buffer uploads with partial uploads / active range updates in the falling layer.
+- 2026-04-03: Pivoted Phase 2 away from `wasm-pack` / `wasm-bindgen`. `src/lib.rs` now exports raw `extern "C"` Wasm functions plus linear-memory pointers so the browser can load `target/wasm32-unknown-unknown/release/sakura_sim.wasm` directly.
+- 2026-04-03: `cargo build --target wasm32-unknown-unknown --release` now succeeds on this machine. `package.json` was updated so `npm run build:wasm` / `build:wasm:dev` use plain Cargo instead of `wasm-pack`.
+- 2026-04-03: `index.html` now loads the raw Wasm module at startup, seeds blossom positions into Wasm memory, and uses Rust for `activate_ready_petals` and `step_falling`.
+- 2026-04-03: JS still owns rendering and layer uploads. `ON_TREE` stays shader-driven, `FALLING` reads active transforms from Wasm memory each frame, and `ON_GROUND` appends landed petals from Wasm-reported indices.
+- 2026-04-03: Verified at `http://127.0.0.1:3000/` with Playwright/DevTools: initial load has no console errors, `advanceTime(3000)` moves counts forward, `window.setPetalCount(16000)` and `window.setPetalCount(24000)` both rebuild correctly, URL sync still works, and fullscreen toggles on/off with `f`.
+- TODO: Replace the current full falling-layer rewrite with partial buffer uploads or active-range updates.
+- TODO: Clean up the remaining mojibake source lines in `index.html` once file encoding is normalized; runtime text is already overwritten with correct Japanese strings.
+- TODO: Decide whether landed petals should remain in JS-only append mode or also move to a Wasm-driven compact ground buffer for larger-count phases.
