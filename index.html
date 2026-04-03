@@ -93,7 +93,7 @@
       line-height: 1.6;
       font-variant-numeric: tabular-nums;
       text-align: right;
-      white-space: nowrap;
+      white-space: pre-line;
     }
 
     #petal-panel {
@@ -233,6 +233,10 @@
     const PETAL_STEP = 500;
     const PETAL_SIZE = 0.10;
     const DEFAULT_GROUND_UPLOAD_BATCH = 1024;
+    const MAX_GROUND_UPLOAD_BATCH = 65536;
+    const TREE_UPLOAD_BYTES_PER_INSTANCE = 36;
+    const DYNAMIC_UPLOAD_BYTES_PER_INSTANCE = 32;
+    const PERF_SAMPLE_ALPHA = 0.16;
     const GROUND_Y = 0.32;
     const GROUND_Y_OUTER = -0.20;
     const ISLAND_RADIUS = 3.2;
@@ -267,7 +271,6 @@
       attribute float aPhase;
       attribute float aScale;
       attribute float aBrightness;
-      attribute float aVisible;
 
       uniform float time;
 
@@ -308,7 +311,7 @@
       void main() {
         vUv = uv;
         vBrightness = aBrightness;
-        vVisible = aVisible;
+        vVisible = 1.0;
 
         float swayX = sin(time * 1.35 + aPhase) * 0.013;
         float swayY = cos(time * 1.05 + aPhase * 0.6) * 0.007;
@@ -446,6 +449,8 @@
     let fallingPetalLayer = null;
     let groundPetalLayer = null;
     let groundLandingQueue = new Uint32Array(0);
+    let groundLandingQueueHead = 0;
+    let groundLandingQueueTail = 0;
     let groundLandingQueueCount = 0;
     let groundUploadBudget = DEFAULT_GROUND_UPLOAD_BATCH;
     let currentPetalCount = getInitialPetalCount();
@@ -461,6 +466,36 @@
       onTree: currentPetalCount,
       falling: 0,
       onGround: 0,
+    };
+
+    const perfStats = {
+      bottleneck: 'warming_up',
+      frameCpuMs: 0,
+      renderCpuMs: 0,
+      wasmActivateMs: 0,
+      wasmStepMs: 0,
+      groundQueueMs: 0,
+      fallingUploadMs: 0,
+      gpuRenderMs: null,
+      uploadedBytesPerFrame: 0,
+      treeUploadBytesPerFrame: 0,
+      fallingUploadBytesPerFrame: 0,
+      groundUploadBytesPerFrame: 0,
+      activePeak: 0,
+      queuePeak: 0,
+      treePeak: currentPetalCount,
+      lastActivatedCount: 0,
+      lastLandedCount: 0,
+      lastGroundFlushCount: 0,
+      gpuSupported: false,
+      gpuSamples: 0,
+    };
+
+    const gpuTimer = {
+      ext: null,
+      pendingQueries: [],
+      activeQuery: null,
+      isWebGL2: false,
     };
 
     initScene();
@@ -522,6 +557,113 @@
       wasmViews.landedIndices = new Uint32Array(memory, sakuraWasm.sim_landed_indices_ptr(), count);
     }
 
+    function smoothMetric(previous, nextValue) {
+      if (!Number.isFinite(nextValue)) {
+        return previous;
+      }
+      if (!Number.isFinite(previous) || previous <= 0) {
+        return nextValue;
+      }
+      return previous + (nextValue - previous) * PERF_SAMPLE_ALPHA;
+    }
+
+    function recordPerfMetric(key, value) {
+      perfStats[key] = smoothMetric(perfStats[key], value);
+    }
+
+    function updatePerfBottleneck() {
+      const candidates = [
+        { label: 'gpu_render', value: perfStats.gpuRenderMs ?? 0 },
+        { label: 'falling_upload', value: perfStats.fallingUploadMs },
+        { label: 'wasm_step', value: perfStats.wasmStepMs },
+        { label: 'wasm_activate', value: perfStats.wasmActivateMs },
+        { label: 'ground_queue', value: perfStats.groundQueueMs },
+      ];
+      candidates.sort((left, right) => right.value - left.value);
+      perfStats.bottleneck = candidates[0].value > 0.25 ? candidates[0].label : 'balanced';
+    }
+
+    function resetPerfStats() {
+      perfStats.bottleneck = 'warming_up';
+      perfStats.frameCpuMs = 0;
+      perfStats.renderCpuMs = 0;
+      perfStats.wasmActivateMs = 0;
+      perfStats.wasmStepMs = 0;
+      perfStats.groundQueueMs = 0;
+      perfStats.fallingUploadMs = 0;
+      perfStats.gpuRenderMs = null;
+      perfStats.uploadedBytesPerFrame = 0;
+      perfStats.treeUploadBytesPerFrame = 0;
+      perfStats.fallingUploadBytesPerFrame = 0;
+      perfStats.groundUploadBytesPerFrame = 0;
+      perfStats.activePeak = 0;
+      perfStats.queuePeak = 0;
+      perfStats.treePeak = currentPetalCount;
+      perfStats.lastActivatedCount = 0;
+      perfStats.lastLandedCount = 0;
+      perfStats.lastGroundFlushCount = 0;
+      perfStats.gpuSamples = 0;
+    }
+
+    function initGpuTimerQuery() {
+      const gl = renderer.getContext();
+      if (!(gl instanceof WebGL2RenderingContext)) {
+        return;
+      }
+
+      const ext = gl.getExtension('EXT_disjoint_timer_query_webgl2');
+      if (!ext) {
+        return;
+      }
+
+      gpuTimer.ext = ext;
+      gpuTimer.isWebGL2 = true;
+      perfStats.gpuSupported = true;
+    }
+
+    function pollGpuTimerQuery() {
+      if (!gpuTimer.ext || !gpuTimer.pendingQueries.length) {
+        return;
+      }
+
+      const gl = renderer.getContext();
+      while (gpuTimer.pendingQueries.length > 0) {
+        const query = gpuTimer.pendingQueries[0];
+        const available = gl.getQueryParameter(query, gl.QUERY_RESULT_AVAILABLE);
+        const disjoint = gl.getParameter(gpuTimer.ext.GPU_DISJOINT_EXT);
+        if (!available || disjoint) {
+          break;
+        }
+
+        const elapsedNanoseconds = gl.getQueryParameter(query, gl.QUERY_RESULT);
+        gl.deleteQuery(query);
+        gpuTimer.pendingQueries.shift();
+        perfStats.gpuSamples += 1;
+        recordPerfMetric('gpuRenderMs', elapsedNanoseconds / 1e6);
+      }
+    }
+
+    function beginGpuTimerQuery() {
+      if (!gpuTimer.ext || gpuTimer.activeQuery) {
+        return;
+      }
+
+      const gl = renderer.getContext();
+      gpuTimer.activeQuery = gl.createQuery();
+      gl.beginQuery(gpuTimer.ext.TIME_ELAPSED_EXT, gpuTimer.activeQuery);
+    }
+
+    function endGpuTimerQuery() {
+      if (!gpuTimer.ext || !gpuTimer.activeQuery) {
+        return;
+      }
+
+      const gl = renderer.getContext();
+      gl.endQuery(gpuTimer.ext.TIME_ELAPSED_EXT);
+      gpuTimer.pendingQueries.push(gpuTimer.activeQuery);
+      gpuTimer.activeQuery = null;
+    }
+
     function createBlossomUpload() {
       const values = new Float32Array(BLOSSOM_POSITIONS.length * 3);
       for (let i = 0; i < BLOSSOM_POSITIONS.length; i += 1) {
@@ -563,15 +705,17 @@
         treePetalLayer.arrays.phase[i] = wasmViews.phase[i];
         treePetalLayer.arrays.scale[i] = wasmViews.scale[i];
         treePetalLayer.arrays.brightness[i] = wasmViews.brightness[i];
-        treePetalLayer.arrays.visible[i] = 1;
+        treePetalLayer.slotToPetal[i] = i;
+        treePetalLayer.petalToSlot[i] = i;
       }
 
+      treePetalLayer.count = wasmViews.count;
+      treePetalLayer.geometry.instanceCount = wasmViews.count;
       treePetalLayer.attributes.baseOffset.needsUpdate = true;
       treePetalLayer.attributes.baseRotation.needsUpdate = true;
       treePetalLayer.attributes.phase.needsUpdate = true;
       treePetalLayer.attributes.scale.needsUpdate = true;
       treePetalLayer.attributes.brightness.needsUpdate = true;
-      treePetalLayer.attributes.visible.needsUpdate = true;
     }
 
     function initScene() {
@@ -594,6 +738,7 @@
       renderer.toneMapping = THREE.ACESFilmicToneMapping;
       renderer.toneMappingExposure = 1.22;
       renderer.sortObjects = true;
+      initGpuTimerQuery();
 
       controls = new OrbitControls(camera, renderer.domElement);
       controls.autoRotate = false;
@@ -911,6 +1056,41 @@
       attribute.needsUpdate = true;
     }
 
+    function clearAttributeRanges(attribute) {
+      if (!attribute) {
+        return;
+      }
+
+      if (typeof attribute.clearUpdateRanges === 'function') {
+        attribute.clearUpdateRanges();
+      } else if (attribute.updateRange) {
+        attribute.updateRange.offset = 0;
+        attribute.updateRange.count = -1;
+      }
+    }
+
+    function appendAttributeRange(attribute, start, count) {
+      if (!attribute || count <= 0) {
+        return;
+      }
+
+      if (typeof attribute.addUpdateRange === 'function') {
+        attribute.addUpdateRange(start, count);
+      } else if (attribute.updateRange) {
+        if (attribute.updateRange.count < 0) {
+          attribute.updateRange.offset = start;
+          attribute.updateRange.count = count;
+        } else {
+          const rangeStart = Math.min(attribute.updateRange.offset, start);
+          const rangeEnd = Math.max(attribute.updateRange.offset + attribute.updateRange.count, start + count);
+          attribute.updateRange.offset = rangeStart;
+          attribute.updateRange.count = rangeEnd - rangeStart;
+        }
+      }
+
+      attribute.needsUpdate = true;
+    }
+
     function buildTreePetalLayer(count) {
       const geometry = createInstancedPetalGeometry();
       geometry.instanceCount = count;
@@ -920,22 +1100,26 @@
       const phase = new Float32Array(count);
       const scale = new Float32Array(count);
       const brightness = new Float32Array(count);
-      const visible = new Float32Array(count);
+      const slotToPetal = new Uint32Array(count);
+      const petalToSlot = new Uint32Array(count);
 
       const baseOffsetAttr = new THREE.InstancedBufferAttribute(baseOffset, 3);
       const baseRotationAttr = new THREE.InstancedBufferAttribute(baseRotation, 3);
       const phaseAttr = new THREE.InstancedBufferAttribute(phase, 1);
       const scaleAttr = new THREE.InstancedBufferAttribute(scale, 1);
       const brightnessAttr = new THREE.InstancedBufferAttribute(brightness, 1);
-      const visibleAttr = new THREE.InstancedBufferAttribute(visible, 1);
-      visibleAttr.setUsage(THREE.DynamicDrawUsage);
+
+      baseOffsetAttr.setUsage(THREE.DynamicDrawUsage);
+      baseRotationAttr.setUsage(THREE.DynamicDrawUsage);
+      phaseAttr.setUsage(THREE.DynamicDrawUsage);
+      scaleAttr.setUsage(THREE.DynamicDrawUsage);
+      brightnessAttr.setUsage(THREE.DynamicDrawUsage);
 
       geometry.setAttribute('baseOffset', baseOffsetAttr);
       geometry.setAttribute('baseRotation', baseRotationAttr);
       geometry.setAttribute('aPhase', phaseAttr);
       geometry.setAttribute('aScale', scaleAttr);
       geometry.setAttribute('aBrightness', brightnessAttr);
-      geometry.setAttribute('aVisible', visibleAttr);
 
       const material = createPetalMaterial(COLORS.petal, TREE_VERTEX_SHADER, {
         time: { value: 0 },
@@ -949,14 +1133,16 @@
         mesh,
         geometry,
         material,
-        arrays: { baseOffset, baseRotation, phase, scale, brightness, visible },
+        count,
+        arrays: { baseOffset, baseRotation, phase, scale, brightness },
+        slotToPetal,
+        petalToSlot,
         attributes: {
           baseOffset: baseOffsetAttr,
           baseRotation: baseRotationAttr,
           phase: phaseAttr,
           scale: scaleAttr,
           brightness: brightnessAttr,
-          visible: visibleAttr,
         },
       };
     }
@@ -1029,6 +1215,8 @@
       groundPetalLayer = buildDynamicPetalLayer(count, COLORS.petalGround, 2);
       fallingPetalLayer = buildDynamicPetalLayer(count, COLORS.petal, 5);
       groundLandingQueue = new Uint32Array(count);
+      groundLandingQueueHead = 0;
+      groundLandingQueueTail = 0;
       groundLandingQueueCount = 0;
 
       scene.add(groundPetalLayer.mesh, treePetalLayer.mesh, fallingPetalLayer.mesh);
@@ -1043,14 +1231,46 @@
       stats.onTree = count;
       stats.falling = 0;
       stats.onGround = 0;
+      resetPerfStats();
     }
 
-    function hideTreePetal(index) {
-      treePetalLayer.arrays.visible[index] = 0;
+    function copyTreePetalSlot(fromSlot, toSlot) {
+      if (fromSlot === toSlot) {
+        return;
+      }
+
+      const sourceOffset = fromSlot * 3;
+      const targetOffset = toSlot * 3;
+      treePetalLayer.arrays.baseOffset[targetOffset] = treePetalLayer.arrays.baseOffset[sourceOffset];
+      treePetalLayer.arrays.baseOffset[targetOffset + 1] = treePetalLayer.arrays.baseOffset[sourceOffset + 1];
+      treePetalLayer.arrays.baseOffset[targetOffset + 2] = treePetalLayer.arrays.baseOffset[sourceOffset + 2];
+      treePetalLayer.arrays.baseRotation[targetOffset] = treePetalLayer.arrays.baseRotation[sourceOffset];
+      treePetalLayer.arrays.baseRotation[targetOffset + 1] = treePetalLayer.arrays.baseRotation[sourceOffset + 1];
+      treePetalLayer.arrays.baseRotation[targetOffset + 2] = treePetalLayer.arrays.baseRotation[sourceOffset + 2];
+      treePetalLayer.arrays.phase[toSlot] = treePetalLayer.arrays.phase[fromSlot];
+      treePetalLayer.arrays.scale[toSlot] = treePetalLayer.arrays.scale[fromSlot];
+      treePetalLayer.arrays.brightness[toSlot] = treePetalLayer.arrays.brightness[fromSlot];
     }
 
-    function flushTreeVisibility(startIndex, count) {
-      markAttributeRange(treePetalLayer.attributes.visible, startIndex, count);
+    function removeTreePetal(index) {
+      const slot = treePetalLayer.petalToSlot[index];
+      if (slot === 0xffffffff || treePetalLayer.count <= 0) {
+        return -1;
+      }
+
+      const lastSlot = treePetalLayer.count - 1;
+      if (slot !== lastSlot) {
+        const movedPetal = treePetalLayer.slotToPetal[lastSlot];
+        copyTreePetalSlot(lastSlot, slot);
+        treePetalLayer.slotToPetal[slot] = movedPetal;
+        treePetalLayer.petalToSlot[movedPetal] = slot;
+      }
+
+      treePetalLayer.petalToSlot[index] = 0xffffffff;
+      treePetalLayer.slotToPetal[lastSlot] = 0xffffffff;
+      treePetalLayer.count = lastSlot;
+      treePetalLayer.geometry.instanceCount = lastSlot;
+      return slot === lastSlot ? -1 : slot;
     }
 
     function queueGroundPetals(landedCount) {
@@ -1058,12 +1278,18 @@
         return;
       }
 
-      groundLandingQueue.set(wasmViews.landedIndices.subarray(0, landedCount), groundLandingQueueCount);
+      for (let i = 0; i < landedCount; i += 1) {
+        groundLandingQueue[groundLandingQueueTail] = wasmViews.landedIndices[i];
+        groundLandingQueueTail = (groundLandingQueueTail + 1) % groundLandingQueue.length;
+      }
+
       groundLandingQueueCount += landedCount;
+      perfStats.queuePeak = Math.max(perfStats.queuePeak, groundLandingQueueCount);
     }
 
     function flushGroundQueue(maxBatch = groundUploadBudget) {
       const flushCount = Math.min(groundLandingQueueCount, maxBatch);
+      perfStats.lastGroundFlushCount = 0;
       if (flushCount <= 0) {
         return 0;
       }
@@ -1071,7 +1297,8 @@
       const startSlot = groundPetalLayer.count;
       for (let i = 0; i < flushCount; i += 1) {
         const slot = startSlot + i;
-        const index = groundLandingQueue[i];
+        const index = groundLandingQueue[groundLandingQueueHead];
+        groundLandingQueueHead = (groundLandingQueueHead + 1) % groundLandingQueue.length;
         writeVec3(
           groundPetalLayer.arrays.offsets,
           slot,
@@ -1090,9 +1317,6 @@
         groundPetalLayer.arrays.brightness[slot] = Math.max(0.76, wasmViews.brightness[index] * 0.88);
       }
 
-      if (flushCount < groundLandingQueueCount) {
-        groundLandingQueue.copyWithin(0, flushCount, groundLandingQueueCount);
-      }
       groundLandingQueueCount -= flushCount;
 
       groundPetalLayer.count += flushCount;
@@ -1101,6 +1325,7 @@
       markAttributeRange(groundPetalLayer.attributes.rotations, startSlot * 3, flushCount * 3);
       markAttributeRange(groundPetalLayer.attributes.scales, startSlot, flushCount);
       markAttributeRange(groundPetalLayer.attributes.brightness, startSlot, flushCount);
+      perfStats.lastGroundFlushCount = flushCount;
       return flushCount;
     }
 
@@ -1132,22 +1357,39 @@
       markAttributeRange(fallingPetalLayer.attributes.rotations, 0, activeCount * 3);
       markAttributeRange(fallingPetalLayer.attributes.scales, 0, activeCount);
       markAttributeRange(fallingPetalLayer.attributes.brightness, 0, activeCount);
+      perfStats.activePeak = Math.max(perfStats.activePeak, activeCount);
+      return activeCount;
     }
 
     function updatePetals(time) {
+      let treeUploadBytes = 0;
+
+      const activateStart = performance.now();
       const activatedCount = sakuraWasm.sim_activate_ready_petals(frameCount, time);
-      let minActivatedIndex = Number.POSITIVE_INFINITY;
-      let maxActivatedIndex = -1;
+      recordPerfMetric('wasmActivateMs', performance.now() - activateStart);
+
+      clearAttributeRanges(treePetalLayer.attributes.baseOffset);
+      clearAttributeRanges(treePetalLayer.attributes.baseRotation);
+      clearAttributeRanges(treePetalLayer.attributes.phase);
+      clearAttributeRanges(treePetalLayer.attributes.scale);
+      clearAttributeRanges(treePetalLayer.attributes.brightness);
+
       for (let i = 0; i < activatedCount; i += 1) {
         const index = wasmViews.activatedIndices[i];
-        hideTreePetal(index);
-        minActivatedIndex = Math.min(minActivatedIndex, index);
-        maxActivatedIndex = Math.max(maxActivatedIndex, index);
-      }
-      if (activatedCount > 0) {
-        flushTreeVisibility(minActivatedIndex, maxActivatedIndex - minActivatedIndex + 1);
+        const changedSlot = removeTreePetal(index);
+        if (changedSlot < 0) {
+          continue;
+        }
+
+        appendAttributeRange(treePetalLayer.attributes.baseOffset, changedSlot * 3, 3);
+        appendAttributeRange(treePetalLayer.attributes.baseRotation, changedSlot * 3, 3);
+        appendAttributeRange(treePetalLayer.attributes.phase, changedSlot, 1);
+        appendAttributeRange(treePetalLayer.attributes.scale, changedSlot, 1);
+        appendAttributeRange(treePetalLayer.attributes.brightness, changedSlot, 1);
+        treeUploadBytes += TREE_UPLOAD_BYTES_PER_INSTANCE;
       }
 
+      const fallingStepStart = performance.now();
       const landedCount = sakuraWasm.sim_step_falling(
         FIXED_DT,
         time,
@@ -1158,28 +1400,52 @@
         GROUND_Y,
         GROUND_Y_OUTER
       );
+      recordPerfMetric('wasmStepMs', performance.now() - fallingStepStart);
 
+      const queueStart = performance.now();
       queueGroundPetals(landedCount);
-      flushGroundQueue();
+      const flushedGroundCount = flushGroundQueue();
+      recordPerfMetric('groundQueueMs', performance.now() - queueStart);
 
-      syncFallingLayerFromWasm();
+      const fallingUploadStart = performance.now();
+      const activeCount = syncFallingLayerFromWasm();
+      recordPerfMetric('fallingUploadMs', performance.now() - fallingUploadStart);
       treePetalLayer.material.uniforms.time.value = time;
 
-      stats.falling = sakuraWasm.sim_active_count();
+      perfStats.lastActivatedCount = activatedCount;
+      perfStats.lastLandedCount = landedCount;
+      perfStats.treePeak = Math.max(perfStats.treePeak, treePetalLayer.count);
+      perfStats.treeUploadBytesPerFrame = treeUploadBytes;
+      perfStats.fallingUploadBytesPerFrame = activeCount * DYNAMIC_UPLOAD_BYTES_PER_INSTANCE;
+      perfStats.groundUploadBytesPerFrame = flushedGroundCount * DYNAMIC_UPLOAD_BYTES_PER_INSTANCE;
+      recordPerfMetric(
+        'uploadedBytesPerFrame',
+        treeUploadBytes + perfStats.fallingUploadBytesPerFrame + perfStats.groundUploadBytesPerFrame
+      );
+
+      stats.falling = activeCount;
       stats.onGround += landedCount;
-      stats.onTree = currentPetalCount - stats.falling - stats.onGround;
+      stats.onTree = treePetalLayer.count;
+      updatePerfBottleneck();
     }
 
     function step(deltaSeconds) {
+      const frameStart = performance.now();
       simTime += deltaSeconds;
       frameCount += 1;
       controls.update();
       updatePetals(simTime);
+      recordPerfMetric('frameCpuMs', performance.now() - frameStart);
       refreshHud();
     }
 
     function render() {
+      pollGpuTimerQuery();
+      const renderStart = performance.now();
+      beginGpuTimerQuery();
       renderer.render(scene, camera);
+      endGpuTimerQuery();
+      recordPerfMetric('renderCpuMs', performance.now() - renderStart);
     }
 
     function animate(now) {
@@ -1213,8 +1479,14 @@
     }
 
     function refreshHud() {
-      statsEl.textContent =
-        `fps ${fpsValue} | petals ${currentPetalCount} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`;
+      const gpuLabel = perfStats.gpuSupported && perfStats.gpuRenderMs !== null
+        ? `${roundValue(perfStats.gpuRenderMs)}ms`
+        : 'n/a';
+      const uploadKilobytes = Math.round(perfStats.uploadedBytesPerFrame / 1024);
+      statsEl.textContent = [
+        `fps ${fpsValue} | petals ${currentPetalCount} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`,
+        `cpu ${roundValue(perfStats.frameCpuMs)}ms | render ${roundValue(perfStats.renderCpuMs)}ms | gpu ${gpuLabel} | upload ${uploadKilobytes}KB | bottleneck ${perfStats.bottleneck}`,
+      ].join('\n');
     }
 
     function clampPetalCount(value) {
@@ -1245,6 +1517,10 @@
       stats.onTree = currentPetalCount;
       stats.falling = 0;
       stats.onGround = 0;
+      groundLandingQueueHead = 0;
+      groundLandingQueueTail = 0;
+      groundLandingQueueCount = 0;
+      resetPerfStats();
     }
 
     function setPetalCount(nextCount) {
@@ -1262,7 +1538,7 @@
 
     function setGroundUploadBudget(nextBudget) {
       const numeric = Number.isFinite(nextBudget) ? Math.floor(nextBudget) : DEFAULT_GROUND_UPLOAD_BATCH;
-      groundUploadBudget = THREE.MathUtils.clamp(numeric, 1, 8192);
+      groundUploadBudget = THREE.MathUtils.clamp(numeric, 1, MAX_GROUND_UPLOAD_BATCH);
       flushGroundQueue();
       refreshHud();
       render();
@@ -1327,6 +1603,28 @@
           groundInstances: groundPetalLayer?.geometry.instanceCount ?? 0,
           pendingGroundUploads: groundLandingQueueCount,
           groundUploadBudget,
+          queueCapacity: groundLandingQueue.length,
+        },
+        perf: {
+          bottleneck: perfStats.bottleneck,
+          frameCpuMs: roundValue(perfStats.frameCpuMs),
+          renderCpuMs: roundValue(perfStats.renderCpuMs),
+          gpuRenderMs: perfStats.gpuRenderMs === null ? null : roundValue(perfStats.gpuRenderMs),
+          wasmActivateMs: roundValue(perfStats.wasmActivateMs),
+          wasmStepMs: roundValue(perfStats.wasmStepMs),
+          groundQueueMs: roundValue(perfStats.groundQueueMs),
+          fallingUploadMs: roundValue(perfStats.fallingUploadMs),
+          uploadedKBPerFrame: Math.round(perfStats.uploadedBytesPerFrame / 1024),
+          treeUploadKBPerFrame: Math.round(perfStats.treeUploadBytesPerFrame / 1024),
+          fallingUploadKBPerFrame: Math.round(perfStats.fallingUploadBytesPerFrame / 1024),
+          groundUploadKBPerFrame: Math.round(perfStats.groundUploadBytesPerFrame / 1024),
+          gpuSupported: perfStats.gpuSupported,
+          gpuSamples: perfStats.gpuSamples,
+          activePeak: perfStats.activePeak,
+          queuePeak: perfStats.queuePeak,
+          lastActivatedCount: perfStats.lastActivatedCount,
+          lastLandedCount: perfStats.lastLandedCount,
+          lastGroundFlushCount: perfStats.lastGroundFlushCount,
         },
         fullscreen: Boolean(document.fullscreenElement),
         fallingSample,

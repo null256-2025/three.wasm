@@ -37,6 +37,8 @@ struct SakuraSim {
     ground_offset: Vec<f32>,
     fall_delay: Vec<i32>,
     state: Vec<u8>,
+    activation_order: Vec<u32>,
+    activation_cursor: usize,
     active_indices: Vec<u32>,
     active_count: usize,
     activated_indices: Vec<u32>,
@@ -74,6 +76,8 @@ impl SakuraSim {
             ground_offset: Vec::new(),
             fall_delay: Vec::new(),
             state: Vec::new(),
+            activation_order: Vec::new(),
+            activation_cursor: 0,
             active_indices: Vec::new(),
             active_count: 0,
             activated_indices: Vec::new(),
@@ -89,6 +93,7 @@ impl SakuraSim {
         self.active_count = 0;
         self.activated_count = 0;
         self.landed_count = 0;
+        self.activation_cursor = 0;
 
         self.pos_x = vec![0.0; count];
         self.pos_y = vec![0.0; count];
@@ -114,6 +119,7 @@ impl SakuraSim {
         self.ground_offset = vec![0.0; count];
         self.fall_delay = vec![0; count];
         self.state = vec![ON_TREE; count];
+        self.activation_order = (0..count as u32).collect();
         self.active_indices = vec![0; count];
         self.activated_indices = vec![0; count];
         self.landed_indices = vec![0; count];
@@ -132,6 +138,7 @@ impl SakuraSim {
         self.active_count = 0;
         self.activated_count = 0;
         self.landed_count = 0;
+        self.activation_cursor = 0;
 
         for i in 0..self.petal_count {
             let blossom_index = self.rand_index(blossom_count);
@@ -167,16 +174,28 @@ impl SakuraSim {
             self.ground_offset[i] = self.rand_range(0.0, 0.01);
             self.fall_delay[i] = 180 + self.rand_index(3600) as i32;
             self.state[i] = ON_TREE;
+            self.activation_order[i] = i as u32;
         }
+
+        let fall_delay = &self.fall_delay;
+        self.activation_order
+            .sort_unstable_by_key(|&idx| fall_delay[idx as usize]);
 
         blossom_count as u32
     }
 
     fn activate_ready_petals(&mut self, frame_count: u32, time: f32) -> u32 {
         self.activated_count = 0;
+        let frame_count = frame_count as i32;
 
-        for i in 0..self.petal_count {
-            if self.state[i] != ON_TREE || self.fall_delay[i] > frame_count as i32 {
+        while self.activation_cursor < self.petal_count {
+            let i = self.activation_order[self.activation_cursor] as usize;
+            if self.fall_delay[i] > frame_count {
+                break;
+            }
+            self.activation_cursor += 1;
+
+            if self.state[i] != ON_TREE {
                 continue;
             }
 
