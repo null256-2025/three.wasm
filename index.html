@@ -10,8 +10,6 @@
       color-scheme: light;
       --rose-50: rgba(255, 248, 252, 0.86);
       --rose-100: rgba(255, 240, 246, 0.56);
-      --rose-200: rgba(228, 172, 189, 0.32);
-      --rose-300: rgba(146, 83, 103, 0.88);
       --ink-soft: rgba(73, 43, 54, 0.9);
     }
 
@@ -24,8 +22,7 @@
     }
 
     body {
-      background:
-        radial-gradient(circle at 50% 76%, #f9e1ea 0%, #f2c8d4 42%, #e3a8bc 100%);
+      background: radial-gradient(circle at 50% 76%, #f9e1ea 0%, #f2c8d4 42%, #e3a8bc 100%);
       font-family: "Yu Mincho", "Hiragino Mincho ProN", "Times New Roman", serif;
       color: var(--ink-soft);
     }
@@ -84,6 +81,13 @@
       color: rgba(104, 60, 74, 0.86);
     }
 
+    #controls {
+      pointer-events: auto;
+      min-width: 260px;
+      display: grid;
+      gap: 10px;
+    }
+
     #stats {
       font-size: 12px;
       line-height: 1.6;
@@ -92,13 +96,62 @@
       white-space: nowrap;
     }
 
+    #petal-panel {
+      display: grid;
+      gap: 8px;
+      font-size: 12px;
+      line-height: 1.4;
+    }
+
+    #petal-row {
+      display: grid;
+      grid-template-columns: 1fr 96px;
+      gap: 10px;
+      align-items: center;
+    }
+
+    #petal-range,
+    #petal-number {
+      width: 100%;
+      margin: 0;
+      accent-color: #d780a0;
+      pointer-events: auto;
+    }
+
+    #petal-number {
+      box-sizing: border-box;
+      border: 1px solid rgba(156, 97, 117, 0.22);
+      border-radius: 12px;
+      padding: 6px 10px;
+      background: rgba(255, 255, 255, 0.65);
+      color: var(--ink-soft);
+      font: inherit;
+    }
+
+    #petal-presets {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .preset-btn {
+      pointer-events: auto;
+      border: 1px solid rgba(156, 97, 117, 0.22);
+      border-radius: 999px;
+      padding: 5px 10px;
+      background: rgba(255, 255, 255, 0.6);
+      color: var(--ink-soft);
+      font: inherit;
+      cursor: pointer;
+    }
+
     #footer {
       display: flex;
       justify-content: center;
     }
 
     #hint {
-      max-width: min(92vw, 620px);
+      max-width: min(92vw, 640px);
       text-align: center;
       font-size: 12px;
       letter-spacing: 0.06em;
@@ -113,6 +166,10 @@
       #header {
         flex-direction: column;
         align-items: stretch;
+      }
+
+      #controls {
+        min-width: 0;
       }
 
       #stats {
@@ -141,11 +198,26 @@
         <strong>Sakura Reverie</strong>
         <span>満開から散り終わりまでを、1枚ずつ積もる花びらで描く。</span>
       </div>
-      <div id="stats" class="chip">fps 0 | 木 0 | 落下 0 | 地面 0</div>
+      <div id="controls">
+        <div id="stats" class="chip">fps 0 | petals 0 | 木 0 | 落下 0 | 地面 0</div>
+        <div id="petal-panel" class="chip">
+          <div>Petals</div>
+          <div id="petal-row">
+            <input id="petal-range" type="range" min="1000" max="100000" step="500" value="2000" />
+            <input id="petal-number" type="number" min="1000" max="100000" step="500" value="2000" />
+          </div>
+          <div id="petal-presets">
+            <button class="preset-btn" type="button" data-petals="2000">2000</button>
+            <button class="preset-btn" type="button" data-petals="8000">8000</button>
+            <button class="preset-btn" type="button" data-petals="16000">16000</button>
+            <button class="preset-btn" type="button" data-petals="100000">100000</button>
+          </div>
+        </div>
+      </div>
     </div>
     <div></div>
     <div id="footer">
-      <div id="hint" class="chip">ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ 花びらは消えずに積もります</div>
+      <div id="hint" class="chip">ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ 花びら数は右上で切替</div>
     </div>
   </div>
 
@@ -155,7 +227,10 @@
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-    const PETAL_COUNT = 2000;
+    const DEFAULT_PETAL_COUNT = 2000;
+    const MIN_PETAL_COUNT = 1000;
+    const MAX_PETAL_COUNT = 100000;
+    const PETAL_STEP = 500;
     const PETAL_SIZE = 0.10;
     const GROUND_Y = 0.32;
     const GROUND_Y_OUTER = -0.20;
@@ -194,12 +269,16 @@
     const dummy = new THREE.Object3D();
     const statsEl = document.getElementById('stats');
     const canvas = document.getElementById('scene');
+    const petalRangeEl = document.getElementById('petal-range');
+    const petalNumberEl = document.getElementById('petal-number');
+    const presetButtonEls = Array.from(document.querySelectorAll('[data-petals]'));
 
     let scene;
     let camera;
     let renderer;
     let controls;
     let petalMesh;
+    let currentPetalCount = getInitialPetalCount();
     let simTime = 0;
     let frameCount = 0;
     let accumulator = 0;
@@ -209,7 +288,7 @@
     let fpsValue = 0;
 
     const stats = {
-      onTree: PETAL_COUNT,
+      onTree: currentPetalCount,
       falling: 0,
       onGround: 0,
     };
@@ -220,12 +299,14 @@
     createTree();
     createRoots();
     createRocks();
-    createPetals();
+    createPetals(currentPetalCount);
+    initPetalControls();
     refreshHud();
     render();
 
     window.render_game_to_text = renderGameToText;
     window.advanceTime = advanceTime;
+    window.setPetalCount = setPetalCount;
 
     requestAnimationFrame(animate);
 
@@ -559,18 +640,30 @@
       });
     }
 
-    function createPetals() {
+    function disposePetals() {
+      if (!petalMesh) {
+        return;
+      }
+
+      scene.remove(petalMesh);
+      petalMesh.geometry.dispose();
+      petalMesh.material.dispose();
+      petalMesh = null;
+      petalData.length = 0;
+    }
+
+    function createPetals(count) {
+      disposePetals();
+
       const petalGeometry = new THREE.PlaneGeometry(PETAL_SIZE * 1.5, PETAL_SIZE);
       const petalMaterial = createPetalMaterial();
-      petalMesh = new THREE.InstancedMesh(petalGeometry, petalMaterial, PETAL_COUNT);
+      petalMesh = new THREE.InstancedMesh(petalGeometry, petalMaterial, count);
       petalMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       petalMesh.frustumCulled = false;
       petalMesh.renderOrder = 3;
       scene.add(petalMesh);
 
-      petalData.length = 0;
-
-      for (let i = 0; i < PETAL_COUNT; i += 1) {
+      for (let i = 0; i < count; i += 1) {
         const origin = BLOSSOM_POSITIONS[(Math.random() * BLOSSOM_POSITIONS.length) | 0];
         const treePosition = new THREE.Vector3(
           origin.x + (Math.random() - 0.5) * 0.24,
@@ -750,11 +843,72 @@
 
     function refreshHud() {
       statsEl.textContent =
-        `fps ${fpsValue} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`;
+        `fps ${fpsValue} | petals ${currentPetalCount} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`;
     }
 
     function roundValue(value) {
       return Math.round(value * 100) / 100;
+    }
+
+    function clampPetalCount(value) {
+      const numeric = Number.isFinite(value) ? value : DEFAULT_PETAL_COUNT;
+      const stepped = Math.round(numeric / PETAL_STEP) * PETAL_STEP;
+      return THREE.MathUtils.clamp(stepped, MIN_PETAL_COUNT, MAX_PETAL_COUNT);
+    }
+
+    function getInitialPetalCount() {
+      const params = new URLSearchParams(window.location.search);
+      const urlValue = Number.parseInt(params.get('petals') || '', 10);
+      return clampPetalCount(urlValue);
+    }
+
+    function syncPetalInputs(value) {
+      petalRangeEl.value = String(value);
+      petalNumberEl.value = String(value);
+    }
+
+    function resetSimulationState() {
+      simTime = 0;
+      frameCount = 0;
+      accumulator = 0;
+      lastFrameTime = performance.now();
+      fpsFrameCounter = 0;
+      fpsStamp = performance.now();
+      fpsValue = 0;
+      stats.onTree = currentPetalCount;
+      stats.falling = 0;
+      stats.onGround = 0;
+    }
+
+    function setPetalCount(nextCount) {
+      currentPetalCount = clampPetalCount(nextCount);
+      syncPetalInputs(currentPetalCount);
+      resetSimulationState();
+      createPetals(currentPetalCount);
+      refreshHud();
+      render();
+      return currentPetalCount;
+    }
+
+    function initPetalControls() {
+      syncPetalInputs(currentPetalCount);
+
+      petalRangeEl.addEventListener('input', () => {
+        syncPetalInputs(clampPetalCount(Number.parseInt(petalRangeEl.value, 10)));
+      });
+      petalRangeEl.addEventListener('change', () => {
+        setPetalCount(Number.parseInt(petalRangeEl.value, 10));
+      });
+
+      petalNumberEl.addEventListener('change', () => {
+        setPetalCount(Number.parseInt(petalNumberEl.value, 10));
+      });
+
+      presetButtonEls.forEach((button) => {
+        button.addEventListener('click', () => {
+          setPetalCount(Number.parseInt(button.dataset.petals, 10));
+        });
+      });
     }
 
     function renderGameToText() {
@@ -774,7 +928,7 @@
         coordinateSystem: 'origin=(0,0,0), +x=right, +y=up, +z=toward initial camera',
         time: roundValue(simTime),
         petals: {
-          total: PETAL_COUNT,
+          total: currentPetalCount,
           onTree: stats.onTree,
           falling: stats.falling,
           onGround: stats.onGround,
