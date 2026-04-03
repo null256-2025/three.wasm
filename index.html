@@ -196,7 +196,7 @@
     <div id="header">
       <div id="title" class="chip">
         <strong>Sakura Reverie</strong>
-        <span>満開から散り終わりまでを、1枚ずつ積もる花びらで描く。</span>
+        <span>花びらがほどけていく流れを、木の上から地面まで静かに追いかける。</span>
       </div>
       <div id="controls">
         <div id="stats" class="chip">fps 0 | petals 0 | 木 0 | 落下 0 | 地面 0</div>
@@ -217,7 +217,7 @@
     </div>
     <div></div>
     <div id="footer">
-      <div id="hint" class="chip">ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ Wasm 実装前の表示上限は 24000</div>
+      <div id="hint" class="chip">ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ Wasm 実装中の表示上限は 24000</div>
     </div>
   </div>
 
@@ -413,8 +413,6 @@
     const petalRangeEl = document.getElementById('petal-range');
     const petalNumberEl = document.getElementById('petal-number');
     const presetButtonEls = Array.from(document.querySelectorAll('[data-petals]'));
-    const titleSubtitleEl = document.querySelector('#title span');
-    const hintEl = document.getElementById('hint');
     const sakuraWasm = await loadSakuraWasm();
 
     const wasmViews = {
@@ -460,12 +458,6 @@
       falling: 0,
       onGround: 0,
     };
-
-    titleSubtitleEl.textContent = '花びらがほどけていく流れを、木の上から地面まで静かに追いかける。';
-    hintEl.textContent = 'ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ Wasm 実装前の表示上限は 24000';
-
-    titleSubtitleEl.textContent = '花びらがほどけていく流れを、木の上から地面まで静かに追いかける。';
-    hintEl.textContent = 'ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ Wasm 実装中の表示上限は 24000';
 
     initScene();
     createBackdrop();
@@ -895,6 +887,25 @@
       array[offset + 2] = z;
     }
 
+    function markAttributeRange(attribute, start, count) {
+      if (!attribute || count <= 0) {
+        return;
+      }
+
+      if (typeof attribute.clearUpdateRanges === 'function') {
+        attribute.clearUpdateRanges();
+      }
+
+      if (typeof attribute.addUpdateRange === 'function') {
+        attribute.addUpdateRange(start, count);
+      } else if (attribute.updateRange) {
+        attribute.updateRange.offset = start;
+        attribute.updateRange.count = count;
+      }
+
+      attribute.needsUpdate = true;
+    }
+
     function buildTreePetalLayer(count) {
       const geometry = createInstancedPetalGeometry();
       geometry.instanceCount = count;
@@ -1031,35 +1042,43 @@
       treePetalLayer.arrays.visible[index] = 0;
     }
 
-    function flushTreeVisibility() {
-      treePetalLayer.attributes.visible.needsUpdate = true;
+    function flushTreeVisibility(startIndex, count) {
+      markAttributeRange(treePetalLayer.attributes.visible, startIndex, count);
     }
 
-    function appendGroundPetal(index) {
-      const slot = groundPetalLayer.count;
-      writeVec3(
-        groundPetalLayer.arrays.offsets,
-        slot,
-        wasmViews.posX[index],
-        wasmViews.posY[index],
-        wasmViews.posZ[index]
-      );
-      writeVec3(
-        groundPetalLayer.arrays.rotations,
-        slot,
-        wasmViews.rotX[index],
-        wasmViews.rotY[index],
-        wasmViews.rotZ[index]
-      );
-      groundPetalLayer.arrays.scales[slot] = wasmViews.scale[index];
-      groundPetalLayer.arrays.brightness[slot] = Math.max(0.76, wasmViews.brightness[index] * 0.88);
+    function appendGroundPetals(landedCount) {
+      if (landedCount <= 0) {
+        return;
+      }
 
-      groundPetalLayer.count += 1;
+      const startSlot = groundPetalLayer.count;
+      for (let i = 0; i < landedCount; i += 1) {
+        const slot = startSlot + i;
+        const index = wasmViews.landedIndices[i];
+        writeVec3(
+          groundPetalLayer.arrays.offsets,
+          slot,
+          wasmViews.posX[index],
+          wasmViews.posY[index],
+          wasmViews.posZ[index]
+        );
+        writeVec3(
+          groundPetalLayer.arrays.rotations,
+          slot,
+          wasmViews.rotX[index],
+          wasmViews.rotY[index],
+          wasmViews.rotZ[index]
+        );
+        groundPetalLayer.arrays.scales[slot] = wasmViews.scale[index];
+        groundPetalLayer.arrays.brightness[slot] = Math.max(0.76, wasmViews.brightness[index] * 0.88);
+      }
+
+      groundPetalLayer.count += landedCount;
       groundPetalLayer.geometry.instanceCount = groundPetalLayer.count;
-      groundPetalLayer.attributes.offsets.needsUpdate = true;
-      groundPetalLayer.attributes.rotations.needsUpdate = true;
-      groundPetalLayer.attributes.scales.needsUpdate = true;
-      groundPetalLayer.attributes.brightness.needsUpdate = true;
+      markAttributeRange(groundPetalLayer.attributes.offsets, startSlot * 3, landedCount * 3);
+      markAttributeRange(groundPetalLayer.attributes.rotations, startSlot * 3, landedCount * 3);
+      markAttributeRange(groundPetalLayer.attributes.scales, startSlot, landedCount);
+      markAttributeRange(groundPetalLayer.attributes.brightness, startSlot, landedCount);
     }
 
     function syncFallingLayerFromWasm() {
@@ -1086,19 +1105,24 @@
 
       fallingPetalLayer.count = activeCount;
       fallingPetalLayer.geometry.instanceCount = activeCount;
-      fallingPetalLayer.attributes.offsets.needsUpdate = true;
-      fallingPetalLayer.attributes.rotations.needsUpdate = true;
-      fallingPetalLayer.attributes.scales.needsUpdate = true;
-      fallingPetalLayer.attributes.brightness.needsUpdate = true;
+      markAttributeRange(fallingPetalLayer.attributes.offsets, 0, activeCount * 3);
+      markAttributeRange(fallingPetalLayer.attributes.rotations, 0, activeCount * 3);
+      markAttributeRange(fallingPetalLayer.attributes.scales, 0, activeCount);
+      markAttributeRange(fallingPetalLayer.attributes.brightness, 0, activeCount);
     }
 
     function updatePetals(time) {
       const activatedCount = sakuraWasm.sim_activate_ready_petals(frameCount, time);
+      let minActivatedIndex = Number.POSITIVE_INFINITY;
+      let maxActivatedIndex = -1;
       for (let i = 0; i < activatedCount; i += 1) {
-        hideTreePetal(wasmViews.activatedIndices[i]);
+        const index = wasmViews.activatedIndices[i];
+        hideTreePetal(index);
+        minActivatedIndex = Math.min(minActivatedIndex, index);
+        maxActivatedIndex = Math.max(maxActivatedIndex, index);
       }
       if (activatedCount > 0) {
-        flushTreeVisibility();
+        flushTreeVisibility(minActivatedIndex, maxActivatedIndex - minActivatedIndex + 1);
       }
 
       const landedCount = sakuraWasm.sim_step_falling(
@@ -1112,9 +1136,7 @@
         GROUND_Y_OUTER
       );
 
-      for (let i = 0; i < landedCount; i += 1) {
-        appendGroundPetal(wasmViews.landedIndices[i]);
-      }
+      appendGroundPetals(landedCount);
 
       syncFallingLayerFromWasm();
       treePetalLayer.material.uniforms.time.value = time;
@@ -1162,11 +1184,6 @@
       }
     }
 
-    refreshHud = function refreshHudFixed() {
-      statsEl.textContent =
-        `fps ${fpsValue} | petals ${currentPetalCount} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`;
-    };
-
     function roundValue(value) {
       return Math.round(value * 100) / 100;
     }
@@ -1181,11 +1198,6 @@
       const stepped = Math.round(numeric / PETAL_STEP) * PETAL_STEP;
       return THREE.MathUtils.clamp(stepped, MIN_PETAL_COUNT, MAX_PETAL_COUNT);
     }
-
-    refreshHud = function refreshHudWasm() {
-      statsEl.textContent =
-        `fps ${fpsValue} | petals ${currentPetalCount} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`;
-    };
 
     function getInitialPetalCount() {
       const params = new URLSearchParams(window.location.search);

@@ -57,6 +57,9 @@ Original prompt: [sakura_final_spec.md](sakura_final_spec.md) を基に実装し
 - 2026-04-03: `index.html` now loads the raw Wasm module at startup, seeds blossom positions into Wasm memory, and uses Rust for `activate_ready_petals` and `step_falling`.
 - 2026-04-03: JS still owns rendering and layer uploads. `ON_TREE` stays shader-driven, `FALLING` reads active transforms from Wasm memory each frame, and `ON_GROUND` appends landed petals from Wasm-reported indices.
 - 2026-04-03: Verified at `http://127.0.0.1:3000/` with Playwright/DevTools: initial load has no console errors, `advanceTime(3000)` moves counts forward, `window.setPetalCount(16000)` and `window.setPetalCount(24000)` both rebuild correctly, URL sync still works, and fullscreen toggles on/off with `f`.
-- TODO: Replace the current full falling-layer rewrite with partial buffer uploads or active-range updates.
+- 2026-04-03: Phase 2 follow-up: `FALLING` and `ON_GROUND` layer uploads now mark only the touched buffer ranges instead of flagging the entire attribute payload every frame. Tree visibility updates also upload only the changed span.
+- 2026-04-03: Cleaned `index.html` runtime strings and source structure around HUD/title/hint text. Removed duplicate `refreshHud*` overrides and aligned the HTML text with the runtime text.
+- 2026-04-03: Re-verified after the partial-upload change: `npm run build:wasm` succeeds, console errors remain at 0, `advanceTime(3000)` still advances falling/landing, `setPetalCount(16000)` / `24000` rebuild correctly, and fullscreen toggle still works.
+- TODO: Consider a deeper partial-upload pass that avoids rewriting the whole active prefix when slot order changes under high churn.
 - TODO: Clean up the remaining mojibake source lines in `index.html` once file encoding is normalized; runtime text is already overwritten with correct Japanese strings.
 - TODO: Decide whether landed petals should remain in JS-only append mode or also move to a Wasm-driven compact ground buffer for larger-count phases.
