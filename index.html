@@ -235,6 +235,7 @@
   <script type="module">
     import * as THREE from 'three';
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { MeshSurfaceSampler } from 'three/addons/math/MeshSurfaceSampler.js';
 
     const DEFAULT_PETAL_COUNT = 2000;
     const MIN_PETAL_COUNT = 1000;
@@ -254,6 +255,19 @@
     const AUTO_ROTATE_SPEED = 0.3;
     const FIXED_DT = 1 / 60;
     const WASM_PATH = './target/wasm32-unknown-unknown/release/sakura_sim.wasm';
+    const ROCK_LAYOUT = [
+      { x: -0.82, y: 0.33, z: 0.18, sx: 0.54, sy: 0.34, sz: 0.44, ry: 0.45, color: 0xe4ddcf, grassRadius: 0.46 },
+      { x: -0.26, y: 0.34, z: 0.86, sx: 0.60, sy: 0.31, sz: 0.48, ry: 1.2, color: 0xd3cabd, grassRadius: 0.48 },
+      { x: 0.48, y: 0.34, z: -0.54, sx: 0.68, sy: 0.34, sz: 0.52, ry: 2.05, color: 0xcfc5b7, grassRadius: 0.52 },
+      { x: 0.96, y: 0.33, z: 0.22, sx: 0.56, sy: 0.30, sz: 0.44, ry: 0.9, color: 0xd8d0c4, grassRadius: 0.46 },
+      { x: 0.10, y: 0.33, z: 0.82, sx: 0.40, sy: 0.25, sz: 0.32, ry: 1.6, color: 0xe7dfd1, grassRadius: 0.34 },
+    ];
+    const STEP_LAYOUT = [
+      { x: 0.78, y: 0.29, z: 1.04, ry: 0.08, scale: [0.64, 0.16, 0.56], grassRadius: 0.30 },
+      { x: 1.16, y: 0.18, z: 1.58, ry: 0.06, scale: [0.70, 0.17, 0.62], grassRadius: 0.33 },
+      { x: 1.54, y: 0.06, z: 2.10, ry: -0.06, scale: [0.78, 0.18, 0.68], grassRadius: 0.36 },
+      { x: 1.88, y: -0.04, z: 2.58, ry: -0.12, scale: [0.86, 0.18, 0.72], grassRadius: 0.38 },
+    ];
 
     const PARAMS = {
       windStrength: 0.002,
@@ -262,18 +276,18 @@
     };
 
     const COLORS = {
-      backdropTop: 0xfff7fb,
-      backdropBottom: 0xe4afc0,
-      fog: 0xf1d2dc,
+      backdropTop: 0xc4f0ff,
+      backdropBottom: 0x7fd0f7,
+      fog: 0x98d8f6,
       petal: 0xf7dce8,
       petalGround: 0xe7c6d3,
-      trunk: 0x5a3423,
-      soil: 0x7a4d33,
-      grass: 0xddd1cf,
-      meadow: 0xdab8c4,
-      meadowShadow: 0xc18f9e,
-      lightWarm: 0xfff8f0,
-      lightCool: 0xf3d8e2,
+      trunk: 0x3f2419,
+      soil: 0x32414c,
+      grass: 0x97d849,
+      meadow: 0x7ec7e8,
+      meadowShadow: 0x4c96b8,
+      lightWarm: 0xfdfefc,
+      lightCool: 0xd7efff,
     };
 
     const TREE_VERTEX_SHADER = `
@@ -530,8 +544,8 @@
     createBackdrop();
     createGround();
     createTree();
-    createRoots();
     createRocks();
+    createStonePath();
     createPetals(currentPetalCount);
     initPetalControls();
     refreshHud();
@@ -870,7 +884,7 @@
           void main() {
             float mixValue = smoothstep(0.0, 1.0, vMix);
             vec3 color = mix(bottomColor, topColor, mixValue);
-            color += vec3(0.03, 0.01, 0.02) * pow(1.0 - mixValue, 2.0);
+            color += vec3(0.04, 0.06, 0.08) * pow(1.0 - mixValue, 2.0);
             gl_FragColor = vec4(color, 1.0);
           }
         `,
@@ -880,32 +894,35 @@
     }
 
     function createGround() {
-      const grassMaterial = new THREE.MeshLambertMaterial({ color: COLORS.grass });
-      const soilMaterial = new THREE.MeshLambertMaterial({ color: COLORS.soil });
+      const grassMaterial = new THREE.MeshLambertMaterial({
+        color: COLORS.grass,
+        flatShading: true,
+      });
+      const soilMaterial = new THREE.MeshLambertMaterial({
+        color: COLORS.soil,
+        flatShading: true,
+      });
 
-      const capGeometry = new THREE.CylinderGeometry(3.2, 3.2, 0.02, 10);
-      const capMesh = new THREE.Mesh(capGeometry, grassMaterial);
-      capMesh.position.y = 0.31;
-      scene.add(capMesh);
+      const topGeometry = buildIslandSurfaceGeometry();
+      const topMesh = new THREE.Mesh(topGeometry, grassMaterial);
+      scene.add(topMesh);
 
-      const bodyGeometry = new THREE.CylinderGeometry(3.2, 3.8, 0.6, 10, 1, false);
-      const bodyPosition = bodyGeometry.attributes.position;
-      for (let i = 0; i < bodyPosition.count; i += 1) {
-        const y = bodyPosition.getY(i);
-        const offsetStrength = y < 0 ? 0.15 : 0.08;
-        bodyPosition.setX(i, bodyPosition.getX(i) + (Math.random() - 0.5) * offsetStrength);
-        bodyPosition.setZ(i, bodyPosition.getZ(i) + (Math.random() - 0.5) * offsetStrength);
-      }
-      bodyGeometry.computeVertexNormals();
+      const grassScatterSurface = new THREE.Mesh(
+        buildGrassScatterGeometry(),
+        new THREE.MeshBasicMaterial({ visible: false })
+      );
+      grassScatterSurface.updateMatrixWorld(true);
+      scene.add(grassScatterSurface);
+      createGrassScatter(grassScatterSurface);
 
-      const bodyMesh = new THREE.Mesh(bodyGeometry, [soilMaterial, grassMaterial, soilMaterial]);
-      bodyMesh.position.y = 0.01;
+      const bodyGeometry = buildIslandBodyGeometry();
+      const bodyMesh = new THREE.Mesh(bodyGeometry, soilMaterial);
       scene.add(bodyMesh);
 
       const meadowGeometry = new THREE.PlaneGeometry(120, 120, 12, 12);
       const meadowPosition = meadowGeometry.attributes.position;
       for (let i = 0; i < meadowPosition.count; i += 1) {
-        meadowPosition.setZ(i, meadowPosition.getZ(i) + (Math.random() - 0.5) * 0.4);
+        meadowPosition.setZ(i, meadowPosition.getZ(i) + (Math.random() - 0.5) * 0.25);
       }
       meadowGeometry.computeVertexNormals();
 
@@ -926,6 +943,181 @@
       glow.rotation.x = -Math.PI / 2;
       glow.position.y = GROUND_Y_OUTER + 0.01;
       scene.add(glow);
+    }
+
+    function islandRadiusAtAngle(angle) {
+      const wave = 1
+        + Math.sin(angle * 2.0 + 0.4) * 0.055
+        + Math.cos(angle * 3.0 - 0.8) * 0.045
+        + Math.sin(angle * 5.0 + 1.3) * 0.022;
+      return ISLAND_RADIUS * wave;
+    }
+
+    function createIslandOutlinePoints(sampleCount = 32, scale = 1) {
+      const points = [];
+      for (let i = 0; i < sampleCount; i += 1) {
+        const angle = (i / sampleCount) * Math.PI * 2;
+        const radius = islandRadiusAtAngle(angle) * scale;
+        points.push(new THREE.Vector2(
+          Math.cos(angle) * radius,
+          Math.sin(angle) * radius
+        ));
+      }
+      return points;
+    }
+
+    function buildIslandSurfaceGeometry() {
+      const shape = new THREE.Shape(createIslandOutlinePoints());
+      const geometry = new THREE.ShapeGeometry(shape, 32);
+      const position = geometry.attributes.position;
+      for (let i = 0; i < position.count; i += 1) {
+        const x = position.getX(i);
+        const y = position.getY(i);
+        const angle = Math.atan2(y, x);
+        const radial = Math.hypot(x, y) / ISLAND_RADIUS;
+        const dome = (1 - radial) * 0.09;
+        const ripple = Math.sin(angle * 3.0 + radial * 5.0) * 0.012 + Math.cos(angle * 5.0 - radial * 4.0) * 0.008;
+        position.setXYZ(i, x, 0.29 + dome + ripple, y);
+      }
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+
+    function buildGrassScatterGeometry() {
+      const geometry = new THREE.CircleGeometry(ISLAND_RADIUS * 0.95, 20);
+      const position = geometry.attributes.position;
+      for (let i = 1; i < position.count; i += 1) {
+        const x = position.getX(i);
+        const y = position.getY(i);
+        const radius = Math.hypot(x, y);
+        const angle = Math.atan2(y, x);
+        const radiusScale = 1 + Math.sin(angle * 3.0) * 0.035 + Math.cos(angle * 5.0) * 0.025;
+        position.setX(i, x * radiusScale);
+        position.setY(i, y * radiusScale);
+        position.setZ(i, Math.sin(radius * 1.4 + angle * 2.0) * 0.015);
+      }
+      geometry.rotateX(-Math.PI / 2);
+      geometry.translate(0, 0.33, 0);
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+
+    function buildIslandBodyGeometry() {
+      const shape = new THREE.Shape(createIslandOutlinePoints());
+      const geometry = new THREE.ExtrudeGeometry(shape, {
+        depth: 0.62,
+        steps: 1,
+        bevelEnabled: false,
+        curveSegments: 32,
+      });
+      geometry.rotateX(Math.PI / 2);
+      geometry.translate(0, 0.23, 0);
+
+      const position = geometry.attributes.position;
+      for (let i = 0; i < position.count; i += 1) {
+        const y = position.getY(i);
+        const angle = Math.atan2(position.getZ(i), position.getX(i));
+        if (y < 0.12) {
+          const scale = 1.03 + (0.12 - y) * 0.04;
+          position.setX(i, position.getX(i) * scale);
+          position.setZ(i, position.getZ(i) * scale);
+        }
+        position.setY(i, y + Math.sin(angle * 2.0 + 0.6) * 0.012);
+      }
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+
+    function createGrassScatter(surfaceMesh) {
+      surfaceMesh.updateWorldMatrix(true, false);
+      const sampler = new MeshSurfaceSampler(surfaceMesh).build();
+      const normal = new THREE.Vector3();
+      const position = new THREE.Vector3();
+      const matrix = new THREE.Matrix4();
+      const quaternion = new THREE.Quaternion();
+      const scale = new THREE.Vector3();
+      const spin = new THREE.Quaternion();
+      const lean = new THREE.Quaternion();
+      const leanAxis = new THREE.Vector3();
+      const up = new THREE.Vector3(0, 1, 0);
+      const worldPosition = new THREE.Vector3();
+      const worldNormal = new THREE.Vector3();
+      const normalMatrix = new THREE.Matrix3().getNormalMatrix(surfaceMesh.matrixWorld);
+
+      const shortBlade = createGrassBladeGeometry(0.16, 0.05);
+      const tallBlade = createGrassBladeGeometry(0.22, 0.06);
+      const shortMaterial = new THREE.MeshLambertMaterial({ color: 0x8bd44a, flatShading: true });
+      const tallMaterial = new THREE.MeshLambertMaterial({ color: 0x79bf41, flatShading: true });
+
+      scene.add(createGrassLayer({
+        geometry: shortBlade,
+        material: shortMaterial,
+        sampler,
+        surfaceMesh,
+        normalMatrix,
+        count: 4200,
+        scaleMin: 0.7,
+        scaleMax: 1.18,
+        radialMin: 0.22,
+        radialMax: ISLAND_RADIUS * 0.97,
+        pathClearance: 0.28,
+      }, position, normal, worldPosition, worldNormal, quaternion, scale, spin, lean, leanAxis, up, matrix));
+
+      scene.add(createGrassLayer({
+        geometry: tallBlade,
+        material: tallMaterial,
+        sampler,
+        surfaceMesh,
+        normalMatrix,
+        count: 1800,
+        scaleMin: 0.88,
+        scaleMax: 1.35,
+        radialMin: ISLAND_RADIUS * 0.62,
+        radialMax: ISLAND_RADIUS * 1.01,
+        pathClearance: 0.18,
+      }, position, normal, worldPosition, worldNormal, quaternion, scale, spin, lean, leanAxis, up, matrix));
+    }
+
+    function createGrassBladeGeometry(height, width) {
+      const geometry = new THREE.ConeGeometry(width, height, 4, 1);
+      geometry.translate(0, height * 0.5, 0);
+      return geometry;
+    }
+
+    function createGrassLayer(config, position, normal, worldPosition, worldNormal, quaternion, scale, spin, lean, leanAxis, up, matrix) {
+      const mesh = new THREE.InstancedMesh(config.geometry, config.material, config.count);
+      mesh.instanceMatrix.setUsage(THREE.StaticDrawUsage);
+
+      for (let i = 0; i < config.count; i += 1) {
+        let accepted = false;
+        for (let attempt = 0; attempt < 18 && !accepted; attempt += 1) {
+          config.sampler.sample(position, normal);
+          worldPosition.copy(position).applyMatrix4(config.surfaceMesh.matrixWorld);
+          worldNormal.copy(normal).applyMatrix3(config.normalMatrix).normalize();
+          const radial = Math.hypot(worldPosition.x, worldPosition.z);
+          const trunkMask = radial < 0.48;
+          const rimMask = radial > config.radialMax || radial < config.radialMin;
+          const rockMask = ROCK_LAYOUT.some((rock) => Math.hypot(worldPosition.x - rock.x, worldPosition.z - rock.z) < rock.grassRadius + config.pathClearance * 0.2);
+          const stepMask = STEP_LAYOUT.some((step) => Math.hypot(worldPosition.x - step.x, worldPosition.z - step.z) < step.grassRadius + config.pathClearance);
+          if (!rockMask && !stepMask && !trunkMask && !rimMask) {
+            accepted = true;
+          }
+        }
+
+        worldPosition.y += 0.005;
+        quaternion.setFromUnitVectors(up, worldNormal);
+        spin.setFromAxisAngle(up, Math.random() * Math.PI * 2);
+        leanAxis.set(Math.random() - 0.5, 0, Math.random() - 0.5).normalize();
+        lean.setFromAxisAngle(leanAxis, THREE.MathUtils.lerp(0.04, 0.22, Math.random()));
+        quaternion.multiply(spin);
+        quaternion.multiply(lean);
+        scale.setScalar(THREE.MathUtils.lerp(config.scaleMin, config.scaleMax, Math.random()));
+        matrix.compose(worldPosition, quaternion, scale);
+        mesh.setMatrixAt(i, matrix);
+      }
+
+      mesh.instanceMatrix.needsUpdate = true;
+      return mesh;
     }
 
     function flattenVertices(vertices) {
@@ -1058,34 +1250,71 @@
     }
 
     function createRocks() {
-      const configs = [
-        { x: 0.8, z: 0.5, sx: 0.35, sy: 0.28, sz: 0.32, ry: 0.3 },
-        { x: -0.5, z: 0.8, sx: 0.28, sy: 0.22, sz: 0.30, ry: 1.1 },
-        { x: 0.3, z: -0.7, sx: 0.42, sy: 0.25, sz: 0.35, ry: 2.2 },
-        { x: -0.9, z: -0.3, sx: 0.20, sy: 0.18, sz: 0.22, ry: 0.8 },
-      ];
-
-      for (let i = 0; i < configs.length; i += 1) {
-        const config = configs[i];
-        const geometry = new THREE.IcosahedronGeometry(0.5, 1);
-        const position = geometry.attributes.position;
-        for (let j = 0; j < position.count; j += 1) {
-          position.setX(j, position.getX(j) + (Math.random() - 0.5) * 0.15);
-          position.setY(j, position.getY(j) + (Math.random() - 0.5) * 0.10);
-          position.setZ(j, position.getZ(j) + (Math.random() - 0.5) * 0.15);
-        }
-        geometry.computeVertexNormals();
-
-        const brightness = 0.65 + Math.random() * 0.2;
+      for (let i = 0; i < ROCK_LAYOUT.length; i += 1) {
+        const config = ROCK_LAYOUT[i];
+        const geometry = buildStylizedRockGeometry(i);
         const material = new THREE.MeshLambertMaterial({
-          color: new THREE.Color(brightness, brightness, brightness),
+          color: config.color,
+          flatShading: true,
         });
         const rock = new THREE.Mesh(geometry, material);
-        rock.position.set(config.x, 0.28 + config.sy * 0.3, config.z);
+        rock.position.set(config.x, config.y + 0.02, config.z);
         rock.rotation.y = config.ry;
         rock.scale.set(config.sx, config.sy, config.sz);
         scene.add(rock);
       }
+    }
+
+    function buildStylizedRockGeometry(seed) {
+      const geometry = new THREE.DodecahedronGeometry(0.5, 0);
+      const position = geometry.attributes.position;
+      for (let i = 0; i < position.count; i += 1) {
+        const x = position.getX(i);
+        const y = position.getY(i);
+        const z = position.getZ(i);
+        const wobble = Math.sin((x + seed) * 3.2) * 0.06 + Math.cos((z - seed) * 4.1) * 0.04;
+        position.setX(i, x * (1.02 + wobble));
+        position.setY(i, y * (0.86 + wobble * 0.4) - 0.04);
+        position.setZ(i, z * (1.0 - wobble * 0.2));
+      }
+      geometry.computeVertexNormals();
+      return geometry;
+    }
+
+    function createStonePath() {
+      for (let i = 0; i < STEP_LAYOUT.length; i += 1) {
+        const step = STEP_LAYOUT[i];
+        const stone = new THREE.Mesh(
+          buildStepStoneGeometry(i),
+          new THREE.MeshLambertMaterial({
+            color: i === 0 ? 0xece6db : 0xe4ddd2,
+            flatShading: true,
+          })
+        );
+        stone.position.set(step.x, step.y, step.z);
+        stone.rotation.x = THREE.MathUtils.degToRad(4 - i * 2);
+        stone.rotation.y = step.ry;
+        stone.rotation.z = THREE.MathUtils.degToRad(i - 1.5);
+        stone.scale.set(step.scale[0], step.scale[1], step.scale[2]);
+        scene.add(stone);
+      }
+    }
+
+    function buildStepStoneGeometry(seed) {
+      const geometry = new THREE.CylinderGeometry(0.55, 0.64, 0.28, 6, 1, false);
+      const position = geometry.attributes.position;
+      for (let i = 0; i < position.count; i += 1) {
+        const x = position.getX(i);
+        const y = position.getY(i);
+        const z = position.getZ(i);
+        const angle = Math.atan2(z, x);
+        const radius = Math.hypot(x, z) * (1 + Math.sin(angle * 2.0 + seed) * 0.12 + Math.cos(angle * 3.0 - seed) * 0.08);
+        position.setX(i, Math.cos(angle) * radius);
+        position.setZ(i, Math.sin(angle) * radius);
+        position.setY(i, y + (y > 0 ? Math.sin(angle * 2.0 + seed * 0.6) * 0.018 : 0));
+      }
+      geometry.computeVertexNormals();
+      return geometry;
     }
 
     function createDensePetalGeometry() {
