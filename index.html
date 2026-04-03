@@ -203,21 +203,21 @@
         <div id="petal-panel" class="chip">
           <div>Petals</div>
           <div id="petal-row">
-            <input id="petal-range" type="range" min="1000" max="100000" step="500" value="2000" />
-            <input id="petal-number" type="number" min="1000" max="100000" step="500" value="2000" />
+            <input id="petal-range" type="range" min="1000" max="24000" step="500" value="2000" />
+            <input id="petal-number" type="number" min="1000" max="24000" step="500" value="2000" />
           </div>
           <div id="petal-presets">
             <button class="preset-btn" type="button" data-petals="2000">2000</button>
             <button class="preset-btn" type="button" data-petals="8000">8000</button>
             <button class="preset-btn" type="button" data-petals="16000">16000</button>
-            <button class="preset-btn" type="button" data-petals="100000">100000</button>
+            <button class="preset-btn" type="button" data-petals="24000">24000</button>
           </div>
         </div>
       </div>
     </div>
     <div></div>
     <div id="footer">
-      <div id="hint" class="chip">ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ 花びら数は右上で切替</div>
+      <div id="hint" class="chip">ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ Wasm 実装前の表示上限は 24000</div>
     </div>
   </div>
 
@@ -229,7 +229,7 @@
 
     const DEFAULT_PETAL_COUNT = 2000;
     const MIN_PETAL_COUNT = 1000;
-    const MAX_PETAL_COUNT = 100000;
+    const MAX_PETAL_COUNT = 24000;
     const PETAL_STEP = 500;
     const PETAL_SIZE = 0.10;
     const GROUND_Y = 0.32;
@@ -250,11 +250,18 @@
       ON_GROUND: 2,
     };
 
+    const TREE_SWAY = {
+      x: { speed: 1.35, amplitude: 0.013, phase: 1.0, fn: Math.sin },
+      y: { speed: 1.05, amplitude: 0.007, phase: 0.6, fn: Math.cos },
+      z: { speed: 1.45, amplitude: 0.013, phase: 1.2, fn: Math.cos },
+    };
+
     const COLORS = {
       backdropTop: 0xfff7fb,
       backdropBottom: 0xe4afc0,
       fog: 0xf1d2dc,
       petal: 0xf7dce8,
+      petalGround: 0xe7c6d3,
       trunk: 0x5a3423,
       soil: 0x7a4d33,
       grass: 0xddd1cf,
@@ -264,20 +271,171 @@
       lightCool: 0xf3d8e2,
     };
 
+    const TREE_VERTEX_SHADER = `
+      attribute vec3 baseOffset;
+      attribute vec3 baseRotation;
+      attribute float aPhase;
+      attribute float aScale;
+      attribute float aBrightness;
+      attribute float aVisible;
+
+      uniform float time;
+
+      varying vec2 vUv;
+      varying float vBrightness;
+      varying float vVisible;
+
+      mat3 rotateX(float angle) {
+        float s = sin(angle);
+        float c = cos(angle);
+        return mat3(
+          1.0, 0.0, 0.0,
+          0.0, c, -s,
+          0.0, s, c
+        );
+      }
+
+      mat3 rotateY(float angle) {
+        float s = sin(angle);
+        float c = cos(angle);
+        return mat3(
+          c, 0.0, s,
+          0.0, 1.0, 0.0,
+          -s, 0.0, c
+        );
+      }
+
+      mat3 rotateZ(float angle) {
+        float s = sin(angle);
+        float c = cos(angle);
+        return mat3(
+          c, -s, 0.0,
+          s, c, 0.0,
+          0.0, 0.0, 1.0
+        );
+      }
+
+      void main() {
+        vUv = uv;
+        vBrightness = aBrightness;
+        vVisible = aVisible;
+
+        float swayX = sin(time * 1.35 + aPhase) * 0.013;
+        float swayY = cos(time * 1.05 + aPhase * 0.6) * 0.007;
+        float swayZ = cos(time * 1.45 + aPhase * 1.2) * 0.013;
+        float twist = sin(time * 1.6 + aPhase * 1.1) * 0.18;
+
+        vec3 transformed = position * aScale;
+        transformed = rotateY(baseRotation.y + twist * 0.15) * transformed;
+        transformed = rotateZ(baseRotation.z + twist * 0.08) * transformed;
+        transformed = rotateX(baseRotation.x + twist * 0.12) * transformed;
+        transformed += baseOffset + vec3(swayX, swayY, swayZ);
+
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
+      }
+    `;
+
+    const DYNAMIC_VERTEX_SHADER = `
+      attribute vec3 aOffset;
+      attribute vec3 aRotation;
+      attribute float aScale;
+      attribute float aBrightness;
+
+      varying vec2 vUv;
+      varying float vBrightness;
+      varying float vVisible;
+
+      mat3 rotateX(float angle) {
+        float s = sin(angle);
+        float c = cos(angle);
+        return mat3(
+          1.0, 0.0, 0.0,
+          0.0, c, -s,
+          0.0, s, c
+        );
+      }
+
+      mat3 rotateY(float angle) {
+        float s = sin(angle);
+        float c = cos(angle);
+        return mat3(
+          c, 0.0, s,
+          0.0, 1.0, 0.0,
+          -s, 0.0, c
+        );
+      }
+
+      mat3 rotateZ(float angle) {
+        float s = sin(angle);
+        float c = cos(angle);
+        return mat3(
+          c, -s, 0.0,
+          s, c, 0.0,
+          0.0, 0.0, 1.0
+        );
+      }
+
+      void main() {
+        vUv = uv;
+        vBrightness = aBrightness;
+        vVisible = 1.0;
+
+        vec3 transformed = position * aScale;
+        transformed = rotateY(aRotation.y) * transformed;
+        transformed = rotateZ(aRotation.z) * transformed;
+        transformed = rotateX(aRotation.x) * transformed;
+        transformed += aOffset;
+
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(transformed, 1.0);
+      }
+    `;
+
+    const PETAL_FRAGMENT_SHADER = `
+      uniform vec3 color;
+
+      varying vec2 vUv;
+      varying float vBrightness;
+      varying float vVisible;
+
+      void main() {
+        if (vVisible < 0.5) {
+          discard;
+        }
+
+        vec2 uv = vUv - 0.5;
+        float d1 = length(uv - vec2(-0.18, 0.05)) - 0.28;
+        float d2 = length(uv - vec2(0.18, 0.05)) - 0.28;
+        float d3 = length(uv - vec2(0.0, -0.15)) - 0.22;
+        float d = min(min(d1, d2), d3);
+        float alpha = 1.0 - smoothstep(-0.02, 0.02, d);
+        if (alpha < 0.1) {
+          discard;
+        }
+
+        vec3 lit = color * vBrightness;
+        lit += (1.0 - length(uv) * 2.0) * 0.08;
+        gl_FragColor = vec4(lit, alpha);
+      }
+    `;
+
     const BLOSSOM_POSITIONS = [];
     const petalData = [];
-    const dummy = new THREE.Object3D();
+    const swayScratch = new THREE.Vector3();
     const statsEl = document.getElementById('stats');
     const canvas = document.getElementById('scene');
     const petalRangeEl = document.getElementById('petal-range');
     const petalNumberEl = document.getElementById('petal-number');
     const presetButtonEls = Array.from(document.querySelectorAll('[data-petals]'));
+    const titleSubtitleEl = document.querySelector('#title span');
+    const hintEl = document.getElementById('hint');
 
     let scene;
     let camera;
     let renderer;
     let controls;
-    let petalMesh;
+    let treePetalLayer = null;
+    let fallingPetalLayer = null;
+    let groundPetalLayer = null;
     let currentPetalCount = getInitialPetalCount();
     let simTime = 0;
     let frameCount = 0;
@@ -292,6 +450,9 @@
       falling: 0,
       onGround: 0,
     };
+
+    titleSubtitleEl.textContent = '花びらがほどけていく流れを、木の上から地面まで静かに追いかける。';
+    hintEl.textContent = 'ドラッグで回転 ・ スクロールでズーム ・ Fでフルスクリーン ・ Wasm 実装前の表示上限は 24000';
 
     initScene();
     createBackdrop();
@@ -600,68 +761,154 @@
       }
     }
 
-    function createPetalMaterial() {
+    function createInstancedPetalGeometry() {
+      const base = new THREE.PlaneGeometry(PETAL_SIZE * 1.45, PETAL_SIZE);
+      const geometry = new THREE.InstancedBufferGeometry().copy(base);
+      base.dispose();
+      return geometry;
+    }
+
+    function createPetalMaterial(color, vertexShader, extraUniforms = {}) {
       return new THREE.ShaderMaterial({
         uniforms: {
-          color: { value: new THREE.Color(COLORS.petal) },
+          color: { value: new THREE.Color(color) },
+          ...extraUniforms,
         },
-        vertexShader: `
-          varying vec2 vUv;
-          varying float vBrightness;
-
-          void main() {
-            vUv = uv;
-            vBrightness = 0.9 + fract(sin(float(gl_InstanceID) * 12.9898) * 43758.5453) * 0.2;
-            gl_Position = projectionMatrix * modelViewMatrix * instanceMatrix * vec4(position, 1.0);
-          }
-        `,
-        fragmentShader: `
-          uniform vec3 color;
-          varying vec2 vUv;
-          varying float vBrightness;
-
-          void main() {
-            vec2 uv = vUv - 0.5;
-            float d1 = length(uv - vec2(-0.18, 0.05)) - 0.28;
-            float d2 = length(uv - vec2(0.18, 0.05)) - 0.28;
-            float d3 = length(uv - vec2(0.0, -0.15)) - 0.22;
-            float d = min(min(d1, d2), d3);
-            float alpha = 1.0 - smoothstep(-0.02, 0.02, d);
-            if (alpha < 0.1) discard;
-
-            vec3 c = color * vBrightness;
-            c += (1.0 - length(uv) * 2.0) * 0.08;
-            gl_FragColor = vec4(c, alpha);
-          }
-        `,
+        vertexShader,
+        fragmentShader: PETAL_FRAGMENT_SHADER,
         transparent: true,
         side: THREE.DoubleSide,
         depthWrite: false,
       });
     }
 
+    function writeVec3(array, index, x, y, z) {
+      const offset = index * 3;
+      array[offset] = x;
+      array[offset + 1] = y;
+      array[offset + 2] = z;
+    }
+
+    function buildTreePetalLayer(count) {
+      const geometry = createInstancedPetalGeometry();
+      geometry.instanceCount = count;
+
+      const baseOffset = new Float32Array(count * 3);
+      const baseRotation = new Float32Array(count * 3);
+      const phase = new Float32Array(count);
+      const scale = new Float32Array(count);
+      const brightness = new Float32Array(count);
+      const visible = new Float32Array(count);
+
+      const baseOffsetAttr = new THREE.InstancedBufferAttribute(baseOffset, 3);
+      const baseRotationAttr = new THREE.InstancedBufferAttribute(baseRotation, 3);
+      const phaseAttr = new THREE.InstancedBufferAttribute(phase, 1);
+      const scaleAttr = new THREE.InstancedBufferAttribute(scale, 1);
+      const brightnessAttr = new THREE.InstancedBufferAttribute(brightness, 1);
+      const visibleAttr = new THREE.InstancedBufferAttribute(visible, 1);
+      visibleAttr.setUsage(THREE.DynamicDrawUsage);
+
+      geometry.setAttribute('baseOffset', baseOffsetAttr);
+      geometry.setAttribute('baseRotation', baseRotationAttr);
+      geometry.setAttribute('aPhase', phaseAttr);
+      geometry.setAttribute('aScale', scaleAttr);
+      geometry.setAttribute('aBrightness', brightnessAttr);
+      geometry.setAttribute('aVisible', visibleAttr);
+
+      const material = createPetalMaterial(COLORS.petal, TREE_VERTEX_SHADER, {
+        time: { value: 0 },
+      });
+
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 4;
+
+      return {
+        mesh,
+        geometry,
+        material,
+        arrays: { baseOffset, baseRotation, phase, scale, brightness, visible },
+        attributes: {
+          baseOffset: baseOffsetAttr,
+          baseRotation: baseRotationAttr,
+          phase: phaseAttr,
+          scale: scaleAttr,
+          brightness: brightnessAttr,
+          visible: visibleAttr,
+        },
+      };
+    }
+
+    function buildDynamicPetalLayer(count, color, renderOrder) {
+      const geometry = createInstancedPetalGeometry();
+      geometry.instanceCount = 0;
+
+      const offsets = new Float32Array(count * 3);
+      const rotations = new Float32Array(count * 3);
+      const scales = new Float32Array(count);
+      const brightness = new Float32Array(count);
+
+      const offsetAttr = new THREE.InstancedBufferAttribute(offsets, 3);
+      const rotationAttr = new THREE.InstancedBufferAttribute(rotations, 3);
+      const scaleAttr = new THREE.InstancedBufferAttribute(scales, 1);
+      const brightnessAttr = new THREE.InstancedBufferAttribute(brightness, 1);
+
+      offsetAttr.setUsage(THREE.DynamicDrawUsage);
+      rotationAttr.setUsage(THREE.DynamicDrawUsage);
+      scaleAttr.setUsage(THREE.DynamicDrawUsage);
+      brightnessAttr.setUsage(THREE.DynamicDrawUsage);
+
+      geometry.setAttribute('aOffset', offsetAttr);
+      geometry.setAttribute('aRotation', rotationAttr);
+      geometry.setAttribute('aScale', scaleAttr);
+      geometry.setAttribute('aBrightness', brightnessAttr);
+
+      const material = createPetalMaterial(color, DYNAMIC_VERTEX_SHADER);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.frustumCulled = false;
+      mesh.renderOrder = renderOrder;
+
+      return {
+        mesh,
+        geometry,
+        material,
+        count: 0,
+        arrays: { offsets, rotations, scales, brightness },
+        attributes: {
+          offsets: offsetAttr,
+          rotations: rotationAttr,
+          scales: scaleAttr,
+          brightness: brightnessAttr,
+        },
+      };
+    }
+
     function disposePetals() {
-      if (!petalMesh) {
-        return;
+      const layers = [treePetalLayer, fallingPetalLayer, groundPetalLayer];
+      for (let i = 0; i < layers.length; i += 1) {
+        const layer = layers[i];
+        if (!layer) {
+          continue;
+        }
+        scene.remove(layer.mesh);
+        layer.geometry.dispose();
+        layer.material.dispose();
       }
 
-      scene.remove(petalMesh);
-      petalMesh.geometry.dispose();
-      petalMesh.material.dispose();
-      petalMesh = null;
+      treePetalLayer = null;
+      fallingPetalLayer = null;
+      groundPetalLayer = null;
       petalData.length = 0;
     }
 
     function createPetals(count) {
       disposePetals();
 
-      const petalGeometry = new THREE.PlaneGeometry(PETAL_SIZE * 1.5, PETAL_SIZE);
-      const petalMaterial = createPetalMaterial();
-      petalMesh = new THREE.InstancedMesh(petalGeometry, petalMaterial, count);
-      petalMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-      petalMesh.frustumCulled = false;
-      petalMesh.renderOrder = 3;
-      scene.add(petalMesh);
+      treePetalLayer = buildTreePetalLayer(count);
+      groundPetalLayer = buildDynamicPetalLayer(count, COLORS.petalGround, 2);
+      fallingPetalLayer = buildDynamicPetalLayer(count, COLORS.petal, 5);
+
+      scene.add(groundPetalLayer.mesh, treePetalLayer.mesh, fallingPetalLayer.mesh);
 
       for (let i = 0; i < count; i += 1) {
         const origin = BLOSSOM_POSITIONS[(Math.random() * BLOSSOM_POSITIONS.length) | 0];
@@ -670,89 +917,122 @@
           origin.y + (Math.random() - 0.5) * 0.14,
           origin.z + (Math.random() - 0.5) * 0.24
         );
-        const rotation = new THREE.Euler(
+        const rotation = new THREE.Vector3(
           (Math.random() - 0.5) * 0.8,
           Math.random() * Math.PI * 2,
           (Math.random() - 0.5) * 0.8
-        );
-        const rotationSpeed = new THREE.Vector3(
-          (Math.random() - 0.5) * 0.04,
-          (Math.random() - 0.5) * 0.02,
-          (Math.random() - 0.5) * 0.04
         );
 
         const petal = {
           state: PETAL_STATE.ON_TREE,
           treePosition,
-          position: new THREE.Vector3(),
+          position: treePosition.clone(),
           velocity: new THREE.Vector3(),
           rotation,
-          rotationSpeed,
+          rotationSpeed: new THREE.Vector3(
+            (Math.random() - 0.5) * 0.04,
+            (Math.random() - 0.5) * 0.02,
+            (Math.random() - 0.5) * 0.04
+          ),
           windPhase: Math.random() * Math.PI * 2,
           fallDelay: 180 + Math.floor(Math.random() * 3600),
           scale: 0.96 + Math.random() * 0.58,
-          swayAmplitude: 0.004 + Math.random() * 0.006,
+          brightness: 0.88 + Math.random() * 0.24,
           groundOffset: Math.random() * 0.01,
         };
 
-        petal.position.copy(treePosition);
         petalData.push(petal);
 
-        dummy.position.copy(treePosition);
-        dummy.rotation.copy(rotation);
-        dummy.scale.setScalar(petal.scale);
-        dummy.updateMatrix();
-        petalMesh.setMatrixAt(i, dummy.matrix);
+        writeVec3(treePetalLayer.arrays.baseOffset, i, treePosition.x, treePosition.y, treePosition.z);
+        writeVec3(treePetalLayer.arrays.baseRotation, i, rotation.x, rotation.y, rotation.z);
+        treePetalLayer.arrays.phase[i] = petal.windPhase;
+        treePetalLayer.arrays.scale[i] = petal.scale;
+        treePetalLayer.arrays.brightness[i] = petal.brightness;
+        treePetalLayer.arrays.visible[i] = 1;
       }
 
-      petalMesh.instanceMatrix.needsUpdate = true;
+      treePetalLayer.attributes.baseOffset.needsUpdate = true;
+      treePetalLayer.attributes.baseRotation.needsUpdate = true;
+      treePetalLayer.attributes.phase.needsUpdate = true;
+      treePetalLayer.attributes.scale.needsUpdate = true;
+      treePetalLayer.attributes.brightness.needsUpdate = true;
+      treePetalLayer.attributes.visible.needsUpdate = true;
+
+      fallingPetalLayer.count = 0;
+      fallingPetalLayer.geometry.instanceCount = 0;
+      groundPetalLayer.count = 0;
+      groundPetalLayer.geometry.instanceCount = 0;
+
+      stats.onTree = count;
+      stats.falling = 0;
+      stats.onGround = 0;
+    }
+
+    function getTreeSway(position, phase, time, target) {
+      target.set(
+        position.x + TREE_SWAY.x.fn(time * TREE_SWAY.x.speed + phase * TREE_SWAY.x.phase) * TREE_SWAY.x.amplitude,
+        position.y + TREE_SWAY.y.fn(time * TREE_SWAY.y.speed + phase * TREE_SWAY.y.phase) * TREE_SWAY.y.amplitude,
+        position.z + TREE_SWAY.z.fn(time * TREE_SWAY.z.speed + phase * TREE_SWAY.z.phase) * TREE_SWAY.z.amplitude
+      );
+      return target;
+    }
+
+    function hideTreePetal(index) {
+      treePetalLayer.arrays.visible[index] = 0;
+      treePetalLayer.attributes.visible.needsUpdate = true;
+    }
+
+    function appendGroundPetal(petal) {
+      const slot = groundPetalLayer.count;
+      writeVec3(groundPetalLayer.arrays.offsets, slot, petal.position.x, petal.position.y, petal.position.z);
+      writeVec3(groundPetalLayer.arrays.rotations, slot, petal.rotation.x, petal.rotation.y, petal.rotation.z);
+      groundPetalLayer.arrays.scales[slot] = petal.scale;
+      groundPetalLayer.arrays.brightness[slot] = Math.max(0.76, petal.brightness * 0.88);
+
+      groundPetalLayer.count += 1;
+      groundPetalLayer.geometry.instanceCount = groundPetalLayer.count;
+      groundPetalLayer.attributes.offsets.needsUpdate = true;
+      groundPetalLayer.attributes.rotations.needsUpdate = true;
+      groundPetalLayer.attributes.scales.needsUpdate = true;
+      groundPetalLayer.attributes.brightness.needsUpdate = true;
+    }
+
+    function syncFallingLayer(activeCount) {
+      fallingPetalLayer.count = activeCount;
+      fallingPetalLayer.geometry.instanceCount = activeCount;
+      fallingPetalLayer.attributes.offsets.needsUpdate = true;
+      fallingPetalLayer.attributes.rotations.needsUpdate = true;
+      fallingPetalLayer.attributes.scales.needsUpdate = true;
+      fallingPetalLayer.attributes.brightness.needsUpdate = true;
     }
 
     function updatePetals(time) {
-      let matrixChanged = false;
       let onTree = 0;
       let falling = 0;
-      let onGround = 0;
+      let activeCount = 0;
 
       for (let i = 0; i < petalData.length; i += 1) {
         const petal = petalData[i];
 
-        if (petal.state === PETAL_STATE.ON_GROUND) {
-          onGround += 1;
-          continue;
+        if (petal.state === PETAL_STATE.ON_TREE && frameCount >= petal.fallDelay) {
+          getTreeSway(petal.treePosition, petal.windPhase, time, swayScratch);
+          petal.state = PETAL_STATE.FALLING;
+          petal.position.copy(swayScratch);
+          petal.velocity.set(
+            (swayScratch.x - petal.treePosition.x) * 0.12,
+            -0.003 - Math.random() * 0.002,
+            (swayScratch.z - petal.treePosition.z) * 0.12
+          );
+          hideTreePetal(i);
         }
 
         if (petal.state === PETAL_STATE.ON_TREE) {
-          const swayX = Math.sin(time * 1.7 + petal.windPhase) * petal.swayAmplitude;
-          const swayY = Math.cos(time * 1.1 + petal.windPhase * 0.6) * petal.swayAmplitude * 0.65;
-          const swayZ = Math.cos(time * 1.5 + petal.windPhase * 1.4) * petal.swayAmplitude;
+          onTree += 1;
+          continue;
+        }
 
-          if (frameCount >= petal.fallDelay) {
-            petal.state = PETAL_STATE.FALLING;
-            petal.position.set(
-              petal.treePosition.x + swayX,
-              petal.treePosition.y + swayY,
-              petal.treePosition.z + swayZ
-            );
-            petal.velocity.set(swayX * 0.18, -0.003 - Math.random() * 0.002, swayZ * 0.18);
-          } else {
-            dummy.position.set(
-              petal.treePosition.x + swayX,
-              petal.treePosition.y + swayY,
-              petal.treePosition.z + swayZ
-            );
-            dummy.rotation.set(
-              petal.rotation.x + swayX * 12,
-              petal.rotation.y,
-              petal.rotation.z + swayZ * 12
-            );
-            dummy.scale.setScalar(petal.scale);
-            dummy.updateMatrix();
-            petalMesh.setMatrixAt(i, dummy.matrix);
-            matrixChanged = true;
-            onTree += 1;
-            continue;
-          }
+        if (petal.state === PETAL_STATE.ON_GROUND) {
+          continue;
         }
 
         const wind =
@@ -781,26 +1061,24 @@
             Math.random() * Math.PI * 2,
             (Math.random() - 0.5) * 0.12
           );
-          onGround += 1;
-        } else {
-          falling += 1;
+          appendGroundPetal(petal);
+          continue;
         }
 
-        dummy.position.copy(petal.position);
-        dummy.rotation.copy(petal.rotation);
-        dummy.scale.setScalar(petal.scale);
-        dummy.updateMatrix();
-        petalMesh.setMatrixAt(i, dummy.matrix);
-        matrixChanged = true;
+        writeVec3(fallingPetalLayer.arrays.offsets, activeCount, petal.position.x, petal.position.y, petal.position.z);
+        writeVec3(fallingPetalLayer.arrays.rotations, activeCount, petal.rotation.x, petal.rotation.y, petal.rotation.z);
+        fallingPetalLayer.arrays.scales[activeCount] = petal.scale;
+        fallingPetalLayer.arrays.brightness[activeCount] = petal.brightness;
+        activeCount += 1;
+        falling += 1;
       }
+
+      syncFallingLayer(activeCount);
+      treePetalLayer.material.uniforms.time.value = time;
 
       stats.onTree = onTree;
       stats.falling = falling;
-      stats.onGround = onGround;
-
-      if (matrixChanged) {
-        petalMesh.instanceMatrix.needsUpdate = true;
-      }
+      stats.onGround = groundPetalLayer.count;
     }
 
     function step(deltaSeconds) {
@@ -841,13 +1119,18 @@
       }
     }
 
-    function refreshHud() {
+    refreshHud = function refreshHudFixed() {
       statsEl.textContent =
         `fps ${fpsValue} | petals ${currentPetalCount} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`;
-    }
+    };
 
     function roundValue(value) {
       return Math.round(value * 100) / 100;
+    }
+
+    function refreshHud() {
+      statsEl.textContent =
+        `fps ${fpsValue} | petals ${currentPetalCount} | 木 ${stats.onTree} | 落下 ${stats.falling} | 地面 ${stats.onGround}`;
     }
 
     function clampPetalCount(value) {
@@ -885,6 +1168,9 @@
       syncPetalInputs(currentPetalCount);
       resetSimulationState();
       createPetals(currentPetalCount);
+      const url = new URL(window.location.href);
+      url.searchParams.set('petals', String(currentPetalCount));
+      history.replaceState(null, '', url);
       refreshHud();
       render();
       return currentPetalCount;
@@ -942,6 +1228,11 @@
           x: roundValue(controls.target.x),
           y: roundValue(controls.target.y),
           z: roundValue(controls.target.z),
+        },
+        layers: {
+          treeInstances: treePetalLayer?.geometry.instanceCount ?? 0,
+          fallingInstances: fallingPetalLayer?.geometry.instanceCount ?? 0,
+          groundInstances: groundPetalLayer?.geometry.instanceCount ?? 0,
         },
         fullscreen: Boolean(document.fullscreenElement),
         fallingSample,
